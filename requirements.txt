@@ -1,7 +1,14 @@
 annotated-types==0.7.0
+black==25.9.0
+click==8.3.0
 greenlet==3.2.4
+mypy_extensions==1.1.0
+packaging==25.0
+pathspec==0.12.1
+platformdirs==4.5.0
 pydantic==2.12.3
 pydantic_core==2.41.4
+pytokens==0.2.0
 SQLAlchemy==2.0.44
 sqlmodel==0.0.27
 typing-inspection==0.4.2
