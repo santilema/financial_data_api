@@ -2,9 +2,9 @@ from sqlmodel import SQLModel, Field, UniqueConstraint
 from datetime import date
 
 
-class Instument(SQLModel, table=True):
+class Instrument(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    ticket: str = Field(unique=True, index=True)
+    ticker: str = Field(unique=True, index=True)
     name: str
 
 
@@ -16,6 +16,5 @@ class DailyPrice(SQLModel, table=True):
     open: float
     high: float
     low: float
-    close: float
-    adjusted_close: float
+    close: float  # yfinance adjusted close
     volume: int
