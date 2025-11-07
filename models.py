@@ -1,4 +1,5 @@
 from sqlmodel import SQLModel, Field, UniqueConstraint
+from sqlalchemy import Column, BigInteger
 from datetime import date
 
 
@@ -9,7 +10,9 @@ class Instrument(SQLModel, table=True):
 
 
 class DailyPrice(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("instrument_id", "date", "uq_instrument_date"),)
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "date", name="uq_instrument_date"),
+    )
     id: int | None = Field(default=None, primary_key=True)
     instrument_id: int = Field(foreign_key="instrument.id", index=True)
     date: date
@@ -17,4 +20,4 @@ class DailyPrice(SQLModel, table=True):
     high: float
     low: float
     close: float  # yfinance adjusted close
-    volume: int
+    volume: int = Field(sa_column=Column(BigInteger))
