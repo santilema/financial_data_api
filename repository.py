@@ -36,9 +36,7 @@ def get_latest_date_for_instrument(db: Session, instrument_id: int) -> date | No
     Returns the most recent date of the data stored for
     the specified instrument.
     """
-    statement = select(
-        DailyPrice.date.where(DailyPrice.instrument_id == instrument_id)
-    ).order_by(DailyPrice.date.desc())
+    statement = select(DailyPrice.date).where(DailyPrice.instrument_id == instrument_id).order_by(DailyPrice.date.desc())
 
     result = db.exec(statement).first()
     return result

@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from contextlib import asynccontextmanager
 from sqlmodel import SQLModel, Session, select
 from typing import List
+from datetime import date, timedelta
 
 from database import engine, get_session
 from models import Instrument, DailyPrice
@@ -73,7 +74,7 @@ async def get_prices_for_ticker(ticker: str, db: Session = Depends(get_session))
     return prices
 
 
-@app.post("/prices/{ticket}/sync", response_model=dict)
+@app.post("/prices/{ticker}/sync", response_model=dict)
 async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     """
     This endpoint finds the latest data in the database
@@ -84,7 +85,7 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     if not db_instrument:
         raise HTTPException(
             status_code=404,
-            detail=f"Instrument {ticker} not found. POST to /instrumets{ticker} first.",
+            detail=f"Instrument {ticker} not found. POST to /instruments/{ticker} first.",
         )
 
     # find latest date in db
@@ -92,18 +93,18 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
         db, instrument_id=db_instrument.id
     )
 
-    if not latest_dat:
+    if not latest_date:
         # this shouldn't really happen, but just in case
         return HTTPException(status_code=400, detail="No price data found to sync.")
 
     # is already up-to-date?
-    if latest_date >= (date.today() == timedelta(days=1)):
+    if latest_date >= (date.today() - timedelta(days=1)):
         return {"message": "Data already up-to-date."}
 
     # fetch only new data
     try:
         new_prices = await yfinance_client.fetch_daily_data_since(
-            ticker=ticker, start_date=latest_date
+            ticker=ticker, start_date=latest_date + timedelta(days=1)
         )
     except yfinance_client.YahooFinanceError as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch new data: {e}")

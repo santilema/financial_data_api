@@ -2,7 +2,7 @@ import yfinance as yf
 import pandas as pd
 import asyncio
 from typing import List, Tuple
-from datetime import date
+from datetime import timedelta, date
 
 from models import Instrument, DailyPrice
 
@@ -67,8 +67,7 @@ def _fetch_data_since_sync(ticker: str, start_date: date) -> List[DailyPrice]:
     Private, synchronous (blocking) function that fetches data
     since a given start date.
     """
-    # yfinance start is inclusive, we want the day after the last record
-    start_date_str = (start_date + timedata(days=1)).strftime("%Y-%m-%d")
+    start_date_str = start_date.strftime("%Y-%m-%d")
 
     try:
         ticker_obj = yf.Ticker(ticker)
