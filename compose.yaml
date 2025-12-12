@@ -1,15 +1,35 @@
 services:
   db:
-      image: postgres:18
-      restart: always
-      ports:
-        - "5432:5432"
-      volumes:
-        - postgres_data:/var/lib/postgresql
-      environment:
-        - POSTGRES_USER=myuser
-        - POSTGRES_PASSWORD=mypassword
-        - POSTGRES_DB=mydb
+    image: postgres:18
+    restart: always
+    container_name: financial_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d mydb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: financial_api
+    ports:
+      - "8000:8000"
+    volumes:
+      # hot-reload: any change made locally is instantly reflected in the container
+      - .:/app
+    environment:
+      - DATABASE_URL=postgresql://myuser:mypassword@db:5432/mydb
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:
