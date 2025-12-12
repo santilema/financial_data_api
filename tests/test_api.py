@@ -5,15 +5,20 @@ from services.yfinance_client import YahooFinanceError
 
 # --- Create instruments ---
 
+
 def test_add_instrument_success(client):
     ticker = "AAPL"
     mock_instrument = Instrument(ticker=ticker, name="Apple Inc.")
-    
+
     mock_prices = [
         DailyPrice(
-            instrument_id=None, # db assigns this
+            instrument_id=None,  # db assigns this
             date=date(2025, 1, 1),
-            open=100.0, high=110.0, low=90.0, close=105.0, volume=1000
+            open=100.0,
+            high=110.0,
+            low=90.0,
+            close=105.0,
+            volume=1000,
         )
     ]
 
@@ -34,7 +39,7 @@ def test_add_instrument_success(client):
 
 def test_add_duplicate_instrument(client):
     ticker = "MSFT"
-    
+
     # first attempt
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (Instrument(ticker=ticker, name="Micro"), [])
@@ -42,14 +47,14 @@ def test_add_duplicate_instrument(client):
 
     # second attempt should fail
     response = client.post(f"/instruments/{ticker}")
-    
+
     assert response.status_code == 400
     assert "already exists" in response.json()["detail"]
 
 
 def test_add_instrument_yfinance_failure(client):
     ticker = "INVALID"
-    
+
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.side_effect = YahooFinanceError("Ticker not found")
         response = client.post(f"/instruments/{ticker}")
@@ -60,6 +65,7 @@ def test_add_instrument_yfinance_failure(client):
 
 # --- Retrieve Prices ---
 
+
 def test_get_prices_not_found(client):
     response = client.get("/prices/INVALID")
     assert response.status_code == 404
@@ -67,25 +73,44 @@ def test_get_prices_not_found(client):
 
 # --- Sync Logic ---
 
+
 def test_sync_prices_success(client):
     ticker = "GOOG"
     old_date = date.today() - timedelta(days=5)
-    
+
     # 1. fill db with old data
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch_init:
         mock_fetch_init.return_value = (
             Instrument(ticker=ticker, name="Google"),
-            [DailyPrice(instrument_id=None, date=old_date, open=1, high=1, low=1, close=1, volume=100)]
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=old_date,
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=100,
+                )
+            ],
         )
         client.post(f"/instruments/{ticker}")
 
     # 2. Sync new data (simulate 1 new day)
-    new_price = DailyPrice(instrument_id=None, date=date.today(), open=2, high=2, low=2, close=2, volume=200)
-    
+    new_price = DailyPrice(
+        instrument_id=None,
+        date=date.today(),
+        open=2,
+        high=2,
+        low=2,
+        close=2,
+        volume=200,
+    )
+
     with patch("services.yfinance_client._fetch_data_since_sync") as mock_sync:
         mock_sync.return_value = [new_price]
         response = client.post(f"/prices/{ticker}/sync")
-        
+
         # Verify requested data starts from the day after last record
         expected_start = old_date + timedelta(days=1)
         assert mock_sync.call_args[0][1] == expected_start
@@ -102,7 +127,17 @@ def test_sync_prices_already_up_to_date(client):
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (
             Instrument(ticker=ticker, name="Nvidia"),
-            [DailyPrice(instrument_id=None, date=yesterday, open=1, high=1, low=1, close=1, volume=1)]
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=yesterday,
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=1,
+                )
+            ],
         )
         client.post(f"/instruments/{ticker}")
 
