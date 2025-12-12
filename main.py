@@ -39,6 +39,7 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
     """
     # check if already exists
     db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
+    print("arrives ", db_instrument)
     if db_instrument:
         raise HTTPException(
             status_code=400, detail=f"Instrument {ticker} already exists."
@@ -49,10 +50,11 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
         instrument, prices = await yfinance_client.fetch_daily_data(ticker)
     except yfinance_client.YahooFinanceError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    print("after fetch ", instrument)
 
     # store in db
     db_instrument = repository.create_instrument(db, instrument=instrument)
-
+    print("after create ", db_instrument.ticker)
     for price in prices:
         price.instrument_id = db_instrument.id
 
