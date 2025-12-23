@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException
 from contextlib import asynccontextmanager
-from sqlmodel import SQLModel, Session, String
+from sqlmodel import SQLModel, Session
 from typing import List
 from datetime import date, timedelta
 
@@ -81,12 +81,36 @@ async def get_prices_for_ticker(ticker: str, db: Session = Depends(get_session))
     return prices
 
 
-@app.delete("/prices/{ticker}", response_model=String)
+@app.delete("/instruments/{ticker}", response_model=dict)
+@app.delete("/prices/{ticker}", response_model=dict)
 async def delete_instrument(ticker: str, db: Session = Depends(get_session)):
     """
     Remove ticker and all its price data from the database.
     """
-    pass
+    db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
+    if not db_instrument:
+        raise HTTPException(status_code=404, detail=f"Instrument {ticker} not found.")
+    if not db_instrument.id:
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong when retrieving instrument id.",
+        )
+
+    prices_deleted, instruments_deleted = repository.delete_instrument_and_prices(
+        db, instrument_id=db_instrument.id
+    )
+
+    if instruments_deleted == 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete instrument {db_instrument.ticker}.",
+        )
+
+    return {
+        "message": f"Instrument {db_instrument.ticker} deleted with {prices_deleted} price rows removed.",
+        "prices_deleted": prices_deleted,
+        "instrument_deleted": instruments_deleted,
+    }
 
 
 @app.post("/prices/{ticker}/sync", response_model=dict)

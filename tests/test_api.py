@@ -153,3 +153,67 @@ def test_sync_prices_already_up_to_date(client):
 def test_sync_prices_ticker_not_found(client):
     response = client.post("/prices/INVALID/sync")
     assert response.status_code == 404
+
+
+# --- Delete Instruments ---
+
+
+def test_delete_instrument_removes_prices(client):
+    ticker = "TSLA"
+    price_date = date(2024, 1, 1)
+
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (
+            Instrument(ticker=ticker, name="Tesla"),
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=price_date,
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=10,
+                )
+            ],
+        )
+        client.post(f"/instruments/{ticker}")
+
+    response = client.delete(f"/instruments/{ticker}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["prices_deleted"] == 1
+    assert data["instrument_deleted"] == 1
+    assert ticker in data["message"]
+
+    # instrument and prices should be gone
+    price_response = client.get(f"/prices/{ticker}")
+    assert price_response.status_code == 404
+
+
+def test_delete_instrument_not_found_does_not_touch_other_data(client):
+    existing_ticker = "IBM"
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (
+            Instrument(ticker=existing_ticker, name="IBM"),
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=date(2023, 1, 1),
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=100,
+                )
+            ],
+        )
+        client.post(f"/instruments/{existing_ticker}")
+
+    response = client.delete("/instruments/UNKNOWN")
+    assert response.status_code == 404
+
+    # existing ticker data should remain untouched
+    existing_prices = client.get(f"/prices/{existing_ticker}")
+    assert existing_prices.status_code == 200
+    assert len(existing_prices.json()) == 1

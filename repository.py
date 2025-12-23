@@ -1,4 +1,4 @@
-from sqlmodel import Session, select
+from sqlmodel import Session, select, delete
 from models import Instrument, DailyPrice
 from typing import List
 from datetime import date
@@ -64,3 +64,33 @@ def get_prices_for_instrument(
 
     statement = statement.order_by(DailyPrice.date)
     return db.exec(statement).all()
+
+
+def delete_prices_for_instrument(db: Session, instrument_id: int) -> int:
+    """
+    Deletes all daily prices for a given instrument.
+    Returns number of rows deleted (caller commits).
+    """
+    statement = delete(DailyPrice).where(DailyPrice.instrument_id == instrument_id)
+    result = db.exec(statement)
+    return result.rowcount or 0
+
+
+def delete_instrument(db: Session, instrument_id: int) -> int:
+    """
+    Deletes an instrument by id. Returns number of rows deleted (caller commits).
+    """
+    statement = delete(Instrument).where(Instrument.id == instrument_id)
+    result = db.exec(statement)
+    return result.rowcount or 0
+
+
+def delete_instrument_and_prices(db: Session, instrument_id: int) -> tuple[int, int]:
+    """
+    Deletes prices first (to satisfy FK constraints), then the instrument.
+    Commits once. Returns (prices_deleted, instruments_deleted).
+    """
+    prices_deleted = delete_prices_for_instrument(db, instrument_id)
+    instruments_deleted = delete_instrument(db, instrument_id)
+    db.commit()
+    return prices_deleted, instruments_deleted
