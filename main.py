@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from contextlib import asynccontextmanager
 from sqlmodel import SQLModel, Session
 from typing import List
@@ -64,9 +64,15 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
 
 
 @app.get("/prices/{ticker}", response_model=List[DailyPrice])
-async def get_prices_for_ticker(ticker: str, db: Session = Depends(get_session)):
+async def get_prices_for_ticker(
+    ticker: str,
+    from_date: date | None = Query(None, alias="from"),
+    until_date: date | None = Query(None, alias="until"),
+    db: Session = Depends(get_session),
+):
     """
-    Gets all stored daily prices for a given instrument.
+    Gets stored daily prices for a given instrument, optionally
+    filtered by date range.
     """
     db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
     if not db_instrument:
@@ -76,7 +82,28 @@ async def get_prices_for_ticker(ticker: str, db: Session = Depends(get_session))
             status_code=500,
             detail="Something went wrong when retrieving instrument id.",
         )
-    prices = repository.get_prices_for_instrument(db, instrument_id=db_instrument.id)
+
+    # Default bounds to full history if one side is missing
+    if from_date is None:
+        from_date = repository.get_earliest_date_for_instrument(
+            db, instrument_id=db_instrument.id
+        )
+    if until_date is None:
+        until_date = repository.get_latest_date_for_instrument(
+            db, instrument_id=db_instrument.id
+        )
+
+    if from_date and until_date and from_date > until_date:
+        raise HTTPException(
+            status_code=400, detail="'from' must be on or before 'until'."
+        )
+
+    prices = repository.get_prices_for_instrument(
+        db,
+        instrument_id=db_instrument.id,
+        start_date=from_date,
+        end_date=until_date,
+    )
 
     return prices
 

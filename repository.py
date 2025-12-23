@@ -46,6 +46,20 @@ def get_latest_date_for_instrument(db: Session, instrument_id: int) -> date | No
     return result
 
 
+def get_earliest_date_for_instrument(db: Session, instrument_id: int) -> date | None:
+    """
+    Returns the earliest date of the data stored for the specified instrument.
+    """
+    statement = (
+        select(DailyPrice.date)
+        .where(DailyPrice.instrument_id == instrument_id)
+        .order_by(DailyPrice.date.asc())
+    )
+
+    result = db.exec(statement).first()
+    return result
+
+
 def get_prices_for_instrument(
     db: Session,
     instrument_id: int,
