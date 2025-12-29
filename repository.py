@@ -23,6 +23,13 @@ def save_daily_prices(db: Session, prices: List[DailyPrice]):
     db.commit()
 
 
+def get_all_instruments(db: Session) -> List[Instrument]:
+    """
+    Fetches all instruments from the database.
+    """
+    return db.exec(select(Instrument)).all()
+
+
 def get_instrument_by_ticker(db: Session, ticker: str) -> Instrument | None:
     """
     Fetches an instrument by its ticker.

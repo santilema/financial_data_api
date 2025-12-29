@@ -63,6 +63,17 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
     return db_instrument
 
 
+@app.get("/instruments", response_model=List[Instrument])
+async def get_all_instruments(db: Session = Depends(get_session)):
+    """
+    Gets a list with all available instruments.
+    """
+    db_instruments = repository.get_all_instruments(db)
+    if not db_instruments:
+        raise HTTPException(status_code=404, detail="No instruments found.")
+    return db_instruments
+
+
 @app.get("/prices/{ticker}", response_model=List[DailyPrice])
 async def get_prices_for_ticker(
     ticker: str,

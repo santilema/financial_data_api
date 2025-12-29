@@ -31,6 +31,10 @@ def test_add_instrument_success(client):
     data = response.json()
     assert data["ticker"] == ticker
     assert data["id"] is not None
+    # ensure instrument is listed
+    instruments_response = client.get("/instruments")
+    assert len(instruments_response.json()) == 1
+    assert instruments_response.json()[0]["ticker"] == ticker
 
     # ensure price actually persisted
     price_response = client.get(f"/prices/{ticker}")
