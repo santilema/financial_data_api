@@ -28,4 +28,6 @@ jobs:
         run: black --check .
 
       - name: run tests
+        env:
+          DATABASE_URL: "postgresql://user:pass@localhost:5432/db"
         run: pytest -v
