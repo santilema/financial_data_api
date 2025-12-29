@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI, Depends, HTTPException, Query
 from contextlib import asynccontextmanager
 from sqlmodel import SQLModel, Session
@@ -9,19 +10,22 @@ from models import Instrument, DailyPrice
 import repository
 from services import yfinance_client
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # code in here runs ONCE before app starts
-    print("Starting up")
-    print("Creating database tables")
+    logger.info("Starting up")
+    logger.info("Creating database tables")
     # Find all classes that inherit from SQLModel (e.g. Instrument)
     SQLModel.metadata.create_all(engine)
-    print("Tables created")
+    logger.info("Tables created")
 
     yield
     # code in here runs ONCE when the app is shutting down
-    print("Shutting down")
+    logger.info("Shutting down")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -37,29 +41,35 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
     """
     Fetches ~20 years of data from yfinance and stores it in the database.
     """
+    logger.info(f"Request received to add instrument {ticker}")
     # check if already exists
     db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
     if db_instrument:
+        logger.warning(f"Instrument {ticker} already exists.")
         raise HTTPException(
             status_code=400, detail=f"Instrument {ticker} already exists."
         )
 
     # fetch from client
     try:
+        logger.info(f"Fetching data for {ticker}")
         instrument, prices = await yfinance_client.fetch_daily_data(ticker)
     except yfinance_client.YahooFinanceError as e:
+        logger.error(f"Failed to fetch data for {ticker}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
     # store in db
     db_instrument = repository.create_instrument(db, instrument=instrument)
     for price in prices:
         if not db_instrument.id:
+            logger.error(f"Failed to retrieve ID for instrument {ticker}")
             raise HTTPException(
                 500, detail="Something went wrong when retrieving new instrument id."
             )
         price.instrument_id = db_instrument.id
 
     repository.save_daily_prices(db, prices=prices)
+    logger.info(f"Instrument {ticker} saved successfully")
     return db_instrument
 
 
@@ -68,9 +78,8 @@ async def get_all_instruments(db: Session = Depends(get_session)):
     """
     Gets a list with all available instruments.
     """
+    logger.info("Request received to get all instruments")
     db_instruments = repository.get_all_instruments(db)
-    if not db_instruments:
-        raise HTTPException(status_code=404, detail="No instruments found.")
     return db_instruments
 
 
@@ -85,6 +94,7 @@ async def get_prices_for_ticker(
     Gets stored daily prices for a given instrument, optionally
     filtered by date range.
     """
+    logger.info(f"Request received to get prices for {ticker}")
     db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
     if not db_instrument:
         raise HTTPException(status_code=404, detail=f"Instrument {ticker} not found.")
@@ -115,7 +125,7 @@ async def get_prices_for_ticker(
         start_date=from_date,
         end_date=until_date,
     )
-
+    logger.info(f"Prices for {ticker} retrieved successfully")
     return prices
 
 
@@ -125,6 +135,7 @@ async def delete_instrument(ticker: str, db: Session = Depends(get_session)):
     """
     Remove ticker and all its price data from the database.
     """
+    logger.info(f"Request received to delete instrument {ticker}")
     db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
     if not db_instrument:
         raise HTTPException(status_code=404, detail=f"Instrument {ticker} not found.")
@@ -139,10 +150,12 @@ async def delete_instrument(ticker: str, db: Session = Depends(get_session)):
     )
 
     if instruments_deleted == 0:
+        logger.error(f"Failed to delete instrument {db_instrument.ticker} after found.")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete instrument {db_instrument.ticker}.",
         )
+    logger.info(f"Instrument {db_instrument.ticker} deleted successfully")
 
     return {
         "message": f"Instrument {db_instrument.ticker} deleted with {prices_deleted} price rows removed.",
@@ -157,6 +170,7 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     This endpoint finds the latest data in the database
     and fetches everything new since then.
     """
+    logger.info(f"Request received to sync latest prices for {ticker}")
     # find the instrument
     db_instrument = repository.get_instrument_by_ticker(db, ticker)
     if not db_instrument:
@@ -176,11 +190,12 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     )
 
     if not latest_date:
-        # this shouldn't really happen, but just in case
+        logger.error("No price data found to sync.")
         return HTTPException(status_code=400, detail="No price data found to sync.")
 
     # is already up-to-date?
     if latest_date >= (date.today() - timedelta(days=1)):
+        logger.info("Data already up-to-date.")
         return {"message": "Data already up-to-date."}
 
     # fetch only new data
@@ -189,9 +204,11 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
             ticker=ticker, start_date=latest_date + timedelta(days=1)
         )
     except yfinance_client.YahooFinanceError as e:
+        logger.error(f"Failed to fetch new data: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch new data: {e}")
 
     if not new_prices:
+        logger.info("Data is already up-to-date")
         return {"message": "Data is already up-to-date"}
 
     # save new prices
@@ -199,5 +216,5 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
         price.instrument_id = db_instrument.id
 
     repository.save_daily_prices(db, prices=new_prices)
-
+    logger.info(f"Sync complete. {len(new_prices)} new records added.")
     return {"message": f"Sync complete. {len(new_prices)} new records added."}
