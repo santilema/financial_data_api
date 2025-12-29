@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from contextlib import asynccontextmanager
-from sqlmodel import SQLModel, Session, select
+from sqlmodel import SQLModel, Session
 from typing import List
 from datetime import date, timedelta
 
@@ -11,7 +11,7 @@ from services import yfinance_client
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     # code in here runs ONCE before app starts
     print("Starting up")
     print("Creating database tables")
@@ -39,7 +39,6 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
     """
     # check if already exists
     db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
-    print("arrives ", db_instrument)
     if db_instrument:
         raise HTTPException(
             status_code=400, detail=f"Instrument {ticker} already exists."
@@ -50,30 +49,106 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
         instrument, prices = await yfinance_client.fetch_daily_data(ticker)
     except yfinance_client.YahooFinanceError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    print("after fetch ", instrument)
 
     # store in db
     db_instrument = repository.create_instrument(db, instrument=instrument)
-    print("after create ", db_instrument.ticker)
     for price in prices:
+        if not db_instrument.id:
+            raise HTTPException(
+                500, detail="Something went wrong when retrieving new instrument id."
+            )
         price.instrument_id = db_instrument.id
 
     repository.save_daily_prices(db, prices=prices)
     return db_instrument
 
 
-@app.get("/prices/{ticker}", response_model=List[DailyPrice])
-async def get_prices_for_ticker(ticker: str, db: Session = Depends(get_session)):
+@app.get("/instruments", response_model=List[Instrument])
+async def get_all_instruments(db: Session = Depends(get_session)):
     """
-    Gets all stored daily prices for a given instrument.
+    Gets a list with all available instruments.
+    """
+    db_instruments = repository.get_all_instruments(db)
+    if not db_instruments:
+        raise HTTPException(status_code=404, detail="No instruments found.")
+    return db_instruments
+
+
+@app.get("/prices/{ticker}", response_model=List[DailyPrice])
+async def get_prices_for_ticker(
+    ticker: str,
+    from_date: date | None = Query(None, alias="from"),
+    until_date: date | None = Query(None, alias="until"),
+    db: Session = Depends(get_session),
+):
+    """
+    Gets stored daily prices for a given instrument, optionally
+    filtered by date range.
     """
     db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
     if not db_instrument:
         raise HTTPException(status_code=404, detail=f"Instrument {ticker} not found.")
+    if not db_instrument.id:
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong when retrieving instrument id.",
+        )
 
-    prices = repository.get_prices_for_instrument(db, instrument_id=db_instrument.id)
+    # Default bounds to full history if one side is missing
+    if from_date is None:
+        from_date = repository.get_earliest_date_for_instrument(
+            db, instrument_id=db_instrument.id
+        )
+    if until_date is None:
+        until_date = repository.get_latest_date_for_instrument(
+            db, instrument_id=db_instrument.id
+        )
+
+    if from_date and until_date and from_date > until_date:
+        raise HTTPException(
+            status_code=400, detail="'from' must be on or before 'until'."
+        )
+
+    prices = repository.get_prices_for_instrument(
+        db,
+        instrument_id=db_instrument.id,
+        start_date=from_date,
+        end_date=until_date,
+    )
 
     return prices
+
+
+@app.delete("/instruments/{ticker}", response_model=dict)
+@app.delete("/prices/{ticker}", response_model=dict)
+async def delete_instrument(ticker: str, db: Session = Depends(get_session)):
+    """
+    Remove ticker and all its price data from the database.
+    """
+    db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
+    if not db_instrument:
+        raise HTTPException(status_code=404, detail=f"Instrument {ticker} not found.")
+    if not db_instrument.id:
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong when retrieving instrument id.",
+        )
+
+    prices_deleted, instruments_deleted = repository.delete_instrument_and_prices(
+        db, instrument_id=db_instrument.id
+    )
+
+    if instruments_deleted == 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete instrument {db_instrument.ticker}.",
+        )
+
+    return {
+        "message": f"Instrument {db_instrument.ticker} deleted with {prices_deleted} price rows removed.",
+        "prices_deleted": prices_deleted,
+        "instrument_deleted": instruments_deleted,
+    }
 
 
 @app.post("/prices/{ticker}/sync", response_model=dict)
@@ -88,6 +163,11 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
         raise HTTPException(
             status_code=404,
             detail=f"Instrument {ticker} not found. POST to /instruments/{ticker} first.",
+        )
+    if not db_instrument.id:
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong when retrieving instrument id.",
         )
 
     # find latest date in db

@@ -31,6 +31,10 @@ def test_add_instrument_success(client):
     data = response.json()
     assert data["ticker"] == ticker
     assert data["id"] is not None
+    # ensure instrument is listed
+    instruments_response = client.get("/instruments")
+    assert len(instruments_response.json()) == 1
+    assert instruments_response.json()[0]["ticker"] == ticker
 
     # ensure price actually persisted
     price_response = client.get(f"/prices/{ticker}")
@@ -69,6 +73,101 @@ def test_add_instrument_yfinance_failure(client):
 def test_get_prices_not_found(client):
     response = client.get("/prices/INVALID")
     assert response.status_code == 404
+
+
+def test_get_prices_default_full_history(client):
+    ticker = "AMZN"
+    first = date(2024, 1, 1)
+    second = date(2024, 1, 2)
+
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (
+            Instrument(ticker=ticker, name="Amazon"),
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=first,
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=100,
+                ),
+                DailyPrice(
+                    instrument_id=None,
+                    date=second,
+                    open=2,
+                    high=2,
+                    low=2,
+                    close=2,
+                    volume=200,
+                ),
+            ],
+        )
+        client.post(f"/instruments/{ticker}")
+
+    response = client.get(f"/prices/{ticker}")
+    assert response.status_code == 200
+    data = response.json()
+    assert [p["date"] for p in data] == [
+        first.isoformat(),
+        second.isoformat(),
+    ]
+
+
+def test_get_prices_filtered_range(client):
+    ticker = "META"
+    dates = [date(2023, 1, 1), date(2023, 1, 2), date(2023, 1, 3)]
+
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (
+            Instrument(ticker=ticker, name="Meta"),
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=d,
+                    open=i,
+                    high=i,
+                    low=i,
+                    close=i,
+                    volume=10 * i,
+                )
+                for i, d in enumerate(dates, start=1)
+            ],
+        )
+        client.post(f"/instruments/{ticker}")
+
+    response = client.get(f"/prices/{ticker}?from=2023-01-02&until=2023-01-03")
+    assert response.status_code == 200
+    data = response.json()
+    assert [p["date"] for p in data] == ["2023-01-02", "2023-01-03"]
+
+    response_single = client.get(f"/prices/{ticker}?from=2023-01-03&until=2023-01-03")
+    assert [p["date"] for p in response_single.json()] == ["2023-01-03"]
+
+
+def test_get_prices_invalid_range(client):
+    ticker = "ORCL"
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (
+            Instrument(ticker=ticker, name="Oracle"),
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=date(2022, 1, 1),
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=1,
+                )
+            ],
+        )
+        client.post(f"/instruments/{ticker}")
+
+    response = client.get(f"/prices/{ticker}?from=2022-02-01&until=2022-01-01")
+    assert response.status_code == 400
+    assert "must be on or before" in response.json()["detail"]
 
 
 # --- Sync Logic ---
@@ -153,3 +252,67 @@ def test_sync_prices_already_up_to_date(client):
 def test_sync_prices_ticker_not_found(client):
     response = client.post("/prices/INVALID/sync")
     assert response.status_code == 404
+
+
+# --- Delete Instruments ---
+
+
+def test_delete_instrument_removes_prices(client):
+    ticker = "TSLA"
+    price_date = date(2024, 1, 1)
+
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (
+            Instrument(ticker=ticker, name="Tesla"),
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=price_date,
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=10,
+                )
+            ],
+        )
+        client.post(f"/instruments/{ticker}")
+
+    response = client.delete(f"/instruments/{ticker}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["prices_deleted"] == 1
+    assert data["instrument_deleted"] == 1
+    assert ticker in data["message"]
+
+    # instrument and prices should be gone
+    price_response = client.get(f"/prices/{ticker}")
+    assert price_response.status_code == 404
+
+
+def test_delete_instrument_not_found_does_not_touch_other_data(client):
+    existing_ticker = "IBM"
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (
+            Instrument(ticker=existing_ticker, name="IBM"),
+            [
+                DailyPrice(
+                    instrument_id=None,
+                    date=date(2023, 1, 1),
+                    open=1,
+                    high=1,
+                    low=1,
+                    close=1,
+                    volume=100,
+                )
+            ],
+        )
+        client.post(f"/instruments/{existing_ticker}")
+
+    response = client.delete("/instruments/UNKNOWN")
+    assert response.status_code == 404
+
+    # existing ticker data should remain untouched
+    existing_prices = client.get(f"/prices/{existing_ticker}")
+    assert existing_prices.status_code == 200
+    assert len(existing_prices.json()) == 1

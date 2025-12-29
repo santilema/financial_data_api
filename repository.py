@@ -1,4 +1,4 @@
-from sqlmodel import Session, select
+from sqlmodel import Session, select, delete
 from models import Instrument, DailyPrice
 from typing import List
 from datetime import date
@@ -21,6 +21,13 @@ def save_daily_prices(db: Session, prices: List[DailyPrice]):
     for price in prices:
         db.add(price)
     db.commit()
+
+
+def get_all_instruments(db: Session) -> List[Instrument]:
+    """
+    Fetches all instruments from the database.
+    """
+    return db.exec(select(Instrument)).all()
 
 
 def get_instrument_by_ticker(db: Session, ticker: str) -> Instrument | None:
@@ -46,6 +53,20 @@ def get_latest_date_for_instrument(db: Session, instrument_id: int) -> date | No
     return result
 
 
+def get_earliest_date_for_instrument(db: Session, instrument_id: int) -> date | None:
+    """
+    Returns the earliest date of the data stored for the specified instrument.
+    """
+    statement = (
+        select(DailyPrice.date)
+        .where(DailyPrice.instrument_id == instrument_id)
+        .order_by(DailyPrice.date.asc())
+    )
+
+    result = db.exec(statement).first()
+    return result
+
+
 def get_prices_for_instrument(
     db: Session,
     instrument_id: int,
@@ -64,3 +85,33 @@ def get_prices_for_instrument(
 
     statement = statement.order_by(DailyPrice.date)
     return db.exec(statement).all()
+
+
+def delete_prices_for_instrument(db: Session, instrument_id: int) -> int:
+    """
+    Deletes all daily prices for a given instrument.
+    Returns number of rows deleted (caller commits).
+    """
+    statement = delete(DailyPrice).where(DailyPrice.instrument_id == instrument_id)
+    result = db.exec(statement)
+    return result.rowcount or 0
+
+
+def delete_instrument(db: Session, instrument_id: int) -> int:
+    """
+    Deletes an instrument by id. Returns number of rows deleted (caller commits).
+    """
+    statement = delete(Instrument).where(Instrument.id == instrument_id)
+    result = db.exec(statement)
+    return result.rowcount or 0
+
+
+def delete_instrument_and_prices(db: Session, instrument_id: int) -> tuple[int, int]:
+    """
+    Deletes prices first (to satisfy FK constraints), then the instrument.
+    Commits once. Returns (prices_deleted, instruments_deleted).
+    """
+    prices_deleted = delete_prices_for_instrument(db, instrument_id)
+    instruments_deleted = delete_instrument(db, instrument_id)
+    db.commit()
+    return prices_deleted, instruments_deleted
