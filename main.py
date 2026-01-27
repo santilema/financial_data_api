@@ -69,6 +69,7 @@ async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
         price.instrument_id = db_instrument.id
 
     repository.save_daily_prices(db, prices=prices)
+    db.refresh(db_instrument)
     logger.info(f"Instrument {ticker} saved successfully")
     return db_instrument
 
