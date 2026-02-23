@@ -1,5 +1,5 @@
 from sqlmodel import Session, select, delete
-from models import Company, DailyPrice
+from models import Company, DailyPrice, FinancialFact, TaxonomyMapping
 from typing import List
 from datetime import date
 
@@ -115,3 +115,86 @@ def delete_company_and_prices(db: Session, company_id: int) -> tuple[int, int]:
     companies_deleted = delete_company(db, company_id)
     db.commit()
     return prices_deleted, companies_deleted
+
+
+def update_company_cik(db: Session, company_id: int, cik: str) -> Company | None:
+    statement = select(Company).where(Company.id == company_id)
+    company = db.exec(statement).first()
+    if company is None:
+        return None
+    company.cik = cik
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    return company
+
+
+def upsert_financial_facts(
+    db: Session, facts: List[FinancialFact]
+) -> tuple[int, int]:
+    inserted = 0
+    updated = 0
+    for fact in facts:
+        statement = select(FinancialFact).where(
+            FinancialFact.company_id == fact.company_id,
+            FinancialFact.metric == fact.metric,
+            FinancialFact.end_date == fact.end_date,
+            FinancialFact.period_type == fact.period_type,
+        )
+        existing = db.exec(statement).first()
+        if existing is None:
+            db.add(fact)
+            inserted += 1
+        else:
+            existing.value = fact.value
+            existing.unit = fact.unit
+            existing.filing_date = fact.filing_date
+            existing.source = fact.source
+            db.add(existing)
+            updated += 1
+    db.commit()
+    return inserted, updated
+
+
+def get_financial_facts(
+    db: Session,
+    company_id: int,
+    metric: str | None = None,
+    period_type: str | None = None,
+) -> List[FinancialFact]:
+    statement = select(FinancialFact).where(
+        FinancialFact.company_id == company_id
+    )
+    if metric:
+        statement = statement.where(FinancialFact.metric == metric)
+    if period_type:
+        statement = statement.where(FinancialFact.period_type == period_type)
+    statement = statement.order_by(FinancialFact.end_date.desc())
+    return db.exec(statement).all()
+
+
+def upsert_taxonomy_mappings(db: Session, mappings: List[dict]) -> int:
+    upserted = 0
+    for m in mappings:
+        statement = select(TaxonomyMapping).where(
+            TaxonomyMapping.xbrl_tag == m["xbrl_tag"]
+        )
+        existing = db.exec(statement).first()
+        if existing is None:
+            db.add(TaxonomyMapping(**m))
+        else:
+            existing.metric = m["metric"]
+            existing.description = m.get("description")
+            db.add(existing)
+        upserted += 1
+    db.commit()
+    return upserted
+
+
+def get_taxonomy_mappings(
+    db: Session, metric: str | None = None
+) -> List[TaxonomyMapping]:
+    statement = select(TaxonomyMapping)
+    if metric:
+        statement = statement.where(TaxonomyMapping.metric == metric)
+    return db.exec(statement).all()
