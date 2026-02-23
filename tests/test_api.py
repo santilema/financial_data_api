@@ -1,7 +1,8 @@
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from datetime import date, timedelta
-from models import Company, DailyPrice
+from models import Company, DailyPrice, FinancialFact
 from services.yfinance_client import YahooFinanceError
+from services.edgar_client import EdgarClientError
 
 # --- Create companies ---
 
@@ -316,3 +317,159 @@ def test_delete_company_not_found_does_not_touch_other_data(client):
     existing_prices = client.get(f"/prices/{existing_ticker}")
     assert existing_prices.status_code == 200
     assert len(existing_prices.json()) == 1
+
+
+# --- Financials (EDGAR) ---
+
+
+def _create_company(client, ticker, name):
+    """Helper to create a company via the API."""
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (Company(ticker=ticker, name=name), [])
+        client.post(f"/companies/{ticker}")
+
+
+def test_ingest_financials_success(client):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple Inc.")
+
+    summary = {"ticker": ticker, "cik": "0000320193", "inserted": 5, "updated": 0}
+    with patch(
+        "main.ingest_company_financials", new_callable=AsyncMock
+    ) as mock_ingest:
+        mock_ingest.return_value = summary
+        response = client.post(f"/companies/{ticker}/financials")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ticker"] == ticker
+    assert data["cik"] == "0000320193"
+    assert data["inserted"] == 5
+
+
+def test_ingest_financials_company_not_found(client):
+    response = client.post("/companies/UNKNOWN/financials")
+    assert response.status_code == 404
+
+
+def test_ingest_financials_edgar_error(client):
+    ticker = "MSFT"
+    _create_company(client, ticker, "Microsoft")
+
+    with patch(
+        "main.ingest_company_financials", new_callable=AsyncMock
+    ) as mock_ingest:
+        mock_ingest.side_effect = EdgarClientError("EDGAR API unavailable")
+        response = client.post(f"/companies/{ticker}/financials")
+
+    assert response.status_code == 400
+    assert "EDGAR API unavailable" in response.json()["detail"]
+
+
+def test_get_financials_success(client, engine):
+    ticker = "AMZN"
+    _create_company(client, ticker, "Amazon")
+
+    # insert facts directly into the db
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=100_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["metric"] == "revenue"
+    assert data[0]["period_type"] == "FY"
+
+
+def test_get_financials_with_filters(client, engine):
+    ticker = "META"
+    _create_company(client, ticker, "Meta")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=100_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=20_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=25_000_000,
+                unit="USD",
+                end_date=date(2024, 3, 31),
+                period_type="Q1",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    # filter by metric only
+    response = client.get(f"/companies/{ticker}/financials?metric=revenue")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert all(d["metric"] == "revenue" for d in data)
+
+    # filter by metric and period_type
+    response = client.get(
+        f"/companies/{ticker}/financials?metric=revenue&period_type=FY"
+    )
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["period_type"] == "FY"
+
+
+def test_get_financials_company_not_found(client):
+    response = client.get("/companies/UNKNOWN/financials")
+    assert response.status_code == 404
+
+
+def test_get_taxonomy(client):
+    response = client.get("/taxonomy")
+    assert response.status_code == 200
+    data = response.json()
+    # taxonomy is seeded during lifespan, so there should be mappings
+    assert len(data) > 0
+    assert "xbrl_tag" in data[0]
+    assert "metric" in data[0]
+
+
+def test_get_taxonomy_filtered(client):
+    response = client.get("/taxonomy?metric=revenue")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) > 0
+    assert all(d["metric"] == "revenue" for d in data)

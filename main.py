@@ -6,9 +6,11 @@ from typing import List
 from datetime import date, timedelta
 
 from database import engine, get_session
-from models import Company, DailyPrice
+from models import Company, DailyPrice, FinancialFact, TaxonomyMapping
 import repository
 from services import yfinance_client
+from services.edgar_pipeline import seed_taxonomy, ingest_company_financials
+from services.edgar_client import EdgarClientError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,6 +24,10 @@ async def lifespan(_app: FastAPI):
     # Find all classes that inherit from SQLModel (e.g. Company)
     SQLModel.metadata.create_all(engine)
     logger.info("Tables created")
+
+    with Session(engine) as db:
+        count = seed_taxonomy(db)
+        logger.info("Seeded %d taxonomy mappings", count)
 
     yield
     # code in here runs ONCE when the app is shutting down
@@ -219,3 +225,62 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     repository.save_daily_prices(db, prices=new_prices)
     logger.info(f"Sync complete. {len(new_prices)} new records added.")
     return {"message": f"Sync complete. {len(new_prices)} new records added."}
+
+
+@app.post("/companies/{ticker}/financials")
+async def ingest_financials(ticker: str, db: Session = Depends(get_session)):
+    """
+    Triggers SEC EDGAR ingestion for a company.
+    """
+    logger.info(f"Request received to ingest financials for {ticker}")
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if not db_company:
+        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+
+    try:
+        result = await ingest_company_financials(db, ticker)
+    except EdgarClientError as e:
+        logger.error(f"EDGAR ingestion failed for {ticker}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    logger.info(f"Ingestion complete for {ticker}")
+    return result
+
+
+@app.get("/companies/{ticker}/financials", response_model=List[FinancialFact])
+async def get_financials(
+    ticker: str,
+    metric: str | None = Query(None),
+    period_type: str | None = Query(None),
+    db: Session = Depends(get_session),
+):
+    """
+    Gets stored financial facts for a given company,
+    optionally filtered by metric and period type.
+    """
+    logger.info(f"Request received to get financials for {ticker}")
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if not db_company:
+        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+    if not db_company.id:
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong when retrieving company id.",
+        )
+
+    facts = repository.get_financial_facts(db, db_company.id, metric, period_type)
+    logger.info(f"Financials for {ticker} retrieved successfully")
+    return facts
+
+
+@app.get("/taxonomy", response_model=List[TaxonomyMapping])
+async def get_taxonomy(
+    metric: str | None = Query(None),
+    db: Session = Depends(get_session),
+):
+    """
+    Lists taxonomy mappings, optionally filtered by metric.
+    """
+    logger.info("Request received to get taxonomy mappings")
+    mappings = repository.get_taxonomy_mappings(db, metric)
+    return mappings
