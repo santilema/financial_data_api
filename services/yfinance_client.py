@@ -4,14 +4,14 @@ import asyncio
 from typing import List, Tuple
 from datetime import timedelta, date
 
-from models import Instrument, DailyPrice
+from models import Company, DailyPrice
 
 
 class YahooFinanceError(Exception):
     pass
 
 
-def _fetch_data_sync(ticker: str) -> Tuple[Instrument, List[DailyPrice]]:
+def _fetch_data_sync(ticker: str) -> Tuple[Company, List[DailyPrice]]:
     """
     Synchronous (blocking) function that encapsulates network request.
     """
@@ -29,13 +29,13 @@ def _fetch_data_sync(ticker: str) -> Tuple[Instrument, List[DailyPrice]]:
 
     # create models
     name = info.get("longName", ticker)
-    instrument = Instrument(ticker=ticker.upper(), name=name)
+    company = Company(ticker=ticker.upper(), name=name)
     prices_list: List[DailyPrice] = []
     hist_df = hist_df.reset_index()
 
     for row in hist_df.itertuples():
         price_data = DailyPrice(
-            instrument_id=0,  # placeholder
+            company_id=0,  # placeholder
             date=row.Date.date(),
             open=row.Open,
             high=row.High,
@@ -45,17 +45,17 @@ def _fetch_data_sync(ticker: str) -> Tuple[Instrument, List[DailyPrice]]:
         )
         prices_list.append(price_data)
 
-    return instrument, prices_list
+    return company, prices_list
 
 
-async def fetch_daily_data(ticker: str) -> Tuple[Instrument, List[DailyPrice]]:
+async def fetch_daily_data(ticker: str) -> Tuple[Company, List[DailyPrice]]:
     """
     Public, asynchronous wrapper that can be called from FastAPI endpoints.
     """
     try:
         # run blocking function in separate thread
-        instrument, prices = await asyncio.to_thread(_fetch_data_sync, ticker)
-        return instrument, prices
+        company, prices = await asyncio.to_thread(_fetch_data_sync, ticker)
+        return company, prices
     except Exception as e:
         if isinstance(e, YahooFinanceError):
             raise e
@@ -83,7 +83,7 @@ def _fetch_data_since_sync(ticker: str, start_date: date) -> List[DailyPrice]:
 
     for row in hist_df.itertuples():
         price_data = DailyPrice(
-            instrument_id=0,  # placeholder
+            company_id=0,  # placeholder
             date=row.Date.date(),
             open=row.Open,
             low=row.Low,

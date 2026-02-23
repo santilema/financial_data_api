@@ -6,7 +6,7 @@ from typing import List
 from datetime import date, timedelta
 
 from database import engine, get_session
-from models import Instrument, DailyPrice
+from models import Company, DailyPrice
 import repository
 from services import yfinance_client
 
@@ -19,7 +19,7 @@ async def lifespan(_app: FastAPI):
     # code in here runs ONCE before app starts
     logger.info("Starting up")
     logger.info("Creating database tables")
-    # Find all classes that inherit from SQLModel (e.g. Instrument)
+    # Find all classes that inherit from SQLModel (e.g. Company)
     SQLModel.metadata.create_all(engine)
     logger.info("Tables created")
 
@@ -36,52 +36,52 @@ def read_root():
     return {"message": "Hello world :D"}
 
 
-@app.post("/instruments/{ticker}", response_model=Instrument)
-async def add_new_instrument(ticker: str, db: Session = Depends(get_session)):
+@app.post("/companies/{ticker}", response_model=Company)
+async def add_new_company(ticker: str, db: Session = Depends(get_session)):
     """
     Fetches ~20 years of data from yfinance and stores it in the database.
     """
-    logger.info(f"Request received to add instrument {ticker}")
+    logger.info(f"Request received to add company {ticker}")
     # check if already exists
-    db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
-    if db_instrument:
-        logger.warning(f"Instrument {ticker} already exists.")
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if db_company:
+        logger.warning(f"Company {ticker} already exists.")
         raise HTTPException(
-            status_code=400, detail=f"Instrument {ticker} already exists."
+            status_code=400, detail=f"Company {ticker} already exists."
         )
 
     # fetch from client
     try:
         logger.info(f"Fetching data for {ticker}")
-        instrument, prices = await yfinance_client.fetch_daily_data(ticker)
+        company, prices = await yfinance_client.fetch_daily_data(ticker)
     except yfinance_client.YahooFinanceError as e:
         logger.error(f"Failed to fetch data for {ticker}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
     # store in db
-    db_instrument = repository.create_instrument(db, instrument=instrument)
+    db_company = repository.create_company(db, company=company)
     for price in prices:
-        if not db_instrument.id:
-            logger.error(f"Failed to retrieve ID for instrument {ticker}")
+        if not db_company.id:
+            logger.error(f"Failed to retrieve ID for company {ticker}")
             raise HTTPException(
-                500, detail="Something went wrong when retrieving new instrument id."
+                500, detail="Something went wrong when retrieving new company id."
             )
-        price.instrument_id = db_instrument.id
+        price.company_id = db_company.id
 
     repository.save_daily_prices(db, prices=prices)
-    db.refresh(db_instrument)
-    logger.info(f"Instrument {ticker} saved successfully")
-    return db_instrument
+    db.refresh(db_company)
+    logger.info(f"Company {ticker} saved successfully")
+    return db_company
 
 
-@app.get("/instruments", response_model=List[Instrument])
-async def get_all_instruments(db: Session = Depends(get_session)):
+@app.get("/companies", response_model=List[Company])
+async def get_all_companies(db: Session = Depends(get_session)):
     """
-    Gets a list with all available instruments.
+    Gets a list with all available companies.
     """
-    logger.info("Request received to get all instruments")
-    db_instruments = repository.get_all_instruments(db)
-    return db_instruments
+    logger.info("Request received to get all companies")
+    db_companies = repository.get_all_companies(db)
+    return db_companies
 
 
 @app.get("/prices/{ticker}", response_model=List[DailyPrice])
@@ -92,27 +92,27 @@ async def get_prices_for_ticker(
     db: Session = Depends(get_session),
 ):
     """
-    Gets stored daily prices for a given instrument, optionally
+    Gets stored daily prices for a given company, optionally
     filtered by date range.
     """
     logger.info(f"Request received to get prices for {ticker}")
-    db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
-    if not db_instrument:
-        raise HTTPException(status_code=404, detail=f"Instrument {ticker} not found.")
-    if not db_instrument.id:
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if not db_company:
+        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+    if not db_company.id:
         raise HTTPException(
             status_code=500,
-            detail="Something went wrong when retrieving instrument id.",
+            detail="Something went wrong when retrieving company id.",
         )
 
     # Default bounds to full history if one side is missing
     if from_date is None:
-        from_date = repository.get_earliest_date_for_instrument(
-            db, instrument_id=db_instrument.id
+        from_date = repository.get_earliest_date_for_company(
+            db, company_id=db_company.id
         )
     if until_date is None:
-        until_date = repository.get_latest_date_for_instrument(
-            db, instrument_id=db_instrument.id
+        until_date = repository.get_latest_date_for_company(
+            db, company_id=db_company.id
         )
 
     if from_date and until_date and from_date > until_date:
@@ -120,9 +120,9 @@ async def get_prices_for_ticker(
             status_code=400, detail="'from' must be on or before 'until'."
         )
 
-    prices = repository.get_prices_for_instrument(
+    prices = repository.get_prices_for_company(
         db,
-        instrument_id=db_instrument.id,
+        company_id=db_company.id,
         start_date=from_date,
         end_date=until_date,
     )
@@ -130,38 +130,38 @@ async def get_prices_for_ticker(
     return prices
 
 
-@app.delete("/instruments/{ticker}", response_model=dict)
+@app.delete("/companies/{ticker}", response_model=dict)
 @app.delete("/prices/{ticker}", response_model=dict)
-async def delete_instrument(ticker: str, db: Session = Depends(get_session)):
+async def delete_company(ticker: str, db: Session = Depends(get_session)):
     """
     Remove ticker and all its price data from the database.
     """
-    logger.info(f"Request received to delete instrument {ticker}")
-    db_instrument = repository.get_instrument_by_ticker(db, ticker=ticker)
-    if not db_instrument:
-        raise HTTPException(status_code=404, detail=f"Instrument {ticker} not found.")
-    if not db_instrument.id:
+    logger.info(f"Request received to delete company {ticker}")
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if not db_company:
+        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+    if not db_company.id:
         raise HTTPException(
             status_code=500,
-            detail="Something went wrong when retrieving instrument id.",
+            detail="Something went wrong when retrieving company id.",
         )
 
-    prices_deleted, instruments_deleted = repository.delete_instrument_and_prices(
-        db, instrument_id=db_instrument.id
+    prices_deleted, companies_deleted = repository.delete_company_and_prices(
+        db, company_id=db_company.id
     )
 
-    if instruments_deleted == 0:
-        logger.error(f"Failed to delete instrument {db_instrument.ticker} after found.")
+    if companies_deleted == 0:
+        logger.error(f"Failed to delete company {db_company.ticker} after found.")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to delete instrument {db_instrument.ticker}.",
+            detail=f"Failed to delete company {db_company.ticker}.",
         )
-    logger.info(f"Instrument {db_instrument.ticker} deleted successfully")
+    logger.info(f"Company {db_company.ticker} deleted successfully")
 
     return {
-        "message": f"Instrument {db_instrument.ticker} deleted with {prices_deleted} price rows removed.",
+        "message": f"Company {db_company.ticker} deleted with {prices_deleted} price rows removed.",
         "prices_deleted": prices_deleted,
-        "instrument_deleted": instruments_deleted,
+        "company_deleted": companies_deleted,
     }
 
 
@@ -172,22 +172,22 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     and fetches everything new since then.
     """
     logger.info(f"Request received to sync latest prices for {ticker}")
-    # find the instrument
-    db_instrument = repository.get_instrument_by_ticker(db, ticker)
-    if not db_instrument:
+    # find the company
+    db_company = repository.get_company_by_ticker(db, ticker)
+    if not db_company:
         raise HTTPException(
             status_code=404,
-            detail=f"Instrument {ticker} not found. POST to /instruments/{ticker} first.",
+            detail=f"Company {ticker} not found. POST to /companies/{ticker} first.",
         )
-    if not db_instrument.id:
+    if not db_company.id:
         raise HTTPException(
             status_code=500,
-            detail="Something went wrong when retrieving instrument id.",
+            detail="Something went wrong when retrieving company id.",
         )
 
     # find latest date in db
-    latest_date = repository.get_latest_date_for_instrument(
-        db, instrument_id=db_instrument.id
+    latest_date = repository.get_latest_date_for_company(
+        db, company_id=db_company.id
     )
 
     if not latest_date:
@@ -214,7 +214,7 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
 
     # save new prices
     for price in new_prices:
-        price.instrument_id = db_instrument.id
+        price.company_id = db_company.id
 
     repository.save_daily_prices(db, prices=new_prices)
     logger.info(f"Sync complete. {len(new_prices)} new records added.")
