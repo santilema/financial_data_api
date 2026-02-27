@@ -129,9 +129,7 @@ def update_company_cik(db: Session, company_id: int, cik: str) -> Company | None
     return company
 
 
-def upsert_financial_facts(
-    db: Session, facts: List[FinancialFact]
-) -> tuple[int, int]:
+def upsert_financial_facts(db: Session, facts: List[FinancialFact]) -> tuple[int, int]:
     inserted = 0
     updated = 0
     for fact in facts:
@@ -162,9 +160,7 @@ def get_financial_facts(
     metric: str | None = None,
     period_type: str | None = None,
 ) -> List[FinancialFact]:
-    statement = select(FinancialFact).where(
-        FinancialFact.company_id == company_id
-    )
+    statement = select(FinancialFact).where(FinancialFact.company_id == company_id)
     if metric:
         statement = statement.where(FinancialFact.metric == metric)
     if period_type:

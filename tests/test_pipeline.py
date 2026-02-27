@@ -18,7 +18,9 @@ def _load_aapl_facts() -> dict:
         return json.load(f)
 
 
-def _create_company(db: Session, ticker: str = "AAPL", cik: str | None = None) -> Company:
+def _create_company(
+    db: Session, ticker: str = "AAPL", cik: str | None = None
+) -> Company:
     company = Company(ticker=ticker, name="Apple Inc.", cik=cik)
     db.add(company)
     db.commit()
@@ -31,8 +33,16 @@ def test_ingest_success(engine, db_init):
         company = _create_company(db)
 
         with (
-            patch("services.edgar_pipeline.edgar_client.resolve_cik", new_callable=AsyncMock, return_value="0000320193"),
-            patch("services.edgar_pipeline.edgar_client.fetch_company_facts", new_callable=AsyncMock, return_value=_load_aapl_facts()),
+            patch(
+                "services.edgar_pipeline.edgar_client.resolve_cik",
+                new_callable=AsyncMock,
+                return_value="0000320193",
+            ),
+            patch(
+                "services.edgar_pipeline.edgar_client.fetch_company_facts",
+                new_callable=AsyncMock,
+                return_value=_load_aapl_facts(),
+            ),
         ):
             result = asyncio.run(ingest_company_financials(db, "AAPL"))
 
@@ -66,8 +76,12 @@ def test_ingest_sets_cik_only_when_missing(engine, db_init):
 
         with (
             patch("services.edgar_pipeline.edgar_client.resolve_cik", mock_resolve),
-            patch("services.edgar_pipeline.edgar_client.fetch_company_facts", mock_facts),
-            patch("services.edgar_pipeline.repository.update_company_cik") as mock_update_cik,
+            patch(
+                "services.edgar_pipeline.edgar_client.fetch_company_facts", mock_facts
+            ),
+            patch(
+                "services.edgar_pipeline.repository.update_company_cik"
+            ) as mock_update_cik,
         ):
             # First call - CIK is None, should update
             asyncio.run(ingest_company_financials(db, "AAPL"))
@@ -90,8 +104,16 @@ def test_ingest_returns_counts(engine, db_init):
         _create_company(db)
 
         with (
-            patch("services.edgar_pipeline.edgar_client.resolve_cik", new_callable=AsyncMock, return_value="0000320193"),
-            patch("services.edgar_pipeline.edgar_client.fetch_company_facts", new_callable=AsyncMock, return_value=_load_aapl_facts()),
+            patch(
+                "services.edgar_pipeline.edgar_client.resolve_cik",
+                new_callable=AsyncMock,
+                return_value="0000320193",
+            ),
+            patch(
+                "services.edgar_pipeline.edgar_client.fetch_company_facts",
+                new_callable=AsyncMock,
+                return_value=_load_aapl_facts(),
+            ),
         ):
             result = asyncio.run(ingest_company_financials(db, "AAPL"))
 

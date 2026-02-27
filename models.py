@@ -15,9 +15,7 @@ class Company(SQLModel, table=True):
 
 
 class DailyPrice(SQLModel, table=True):
-    __table_args__ = (
-        UniqueConstraint("company_id", "date", name="uq_company_date"),
-    )
+    __table_args__ = (UniqueConstraint("company_id", "date", name="uq_company_date"),)
     id: int | None = Field(default=None, primary_key=True)
     company_id: int = Field(foreign_key="company.id", index=True)
     date: date
@@ -32,7 +30,10 @@ class FinancialFact(SQLModel, table=True):
     __tablename__ = "financial_fact"
     __table_args__ = (
         UniqueConstraint(
-            "company_id", "metric", "end_date", "period_type",
+            "company_id",
+            "metric",
+            "end_date",
+            "period_type",
             name="uq_company_metric_end_period",
         ),
     )

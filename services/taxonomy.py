@@ -81,9 +81,7 @@ _FP_MAP = {
 }
 
 
-def normalize_company_facts(
-    company_id: int, facts_json: dict
-) -> list[FinancialFact]:
+def normalize_company_facts(company_id: int, facts_json: dict) -> list[FinancialFact]:
     us_gaap = facts_json.get("facts", {}).get("us-gaap", {})
     if not us_gaap:
         return []

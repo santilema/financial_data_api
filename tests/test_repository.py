@@ -112,8 +112,16 @@ def test_get_financial_facts_filter_period_type(engine, db_init):
 def test_upsert_taxonomy_mappings(engine, db_init):
     with Session(engine) as db:
         mappings = [
-            {"xbrl_tag": "Revenues", "metric": "revenue", "description": "Total revenue"},
-            {"xbrl_tag": "NetIncomeLoss", "metric": "net_income", "description": "Net income"},
+            {
+                "xbrl_tag": "Revenues",
+                "metric": "revenue",
+                "description": "Total revenue",
+            },
+            {
+                "xbrl_tag": "NetIncomeLoss",
+                "metric": "net_income",
+                "description": "Net income",
+            },
         ]
         count = upsert_taxonomy_mappings(db, mappings)
         assert count == 2

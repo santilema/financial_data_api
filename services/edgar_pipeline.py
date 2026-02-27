@@ -35,7 +35,9 @@ async def ingest_company_financials(db: Session, ticker: str) -> dict:
 
     logger.info(
         "Ingestion complete for %s: inserted=%d, updated=%d",
-        ticker, inserted, updated,
+        ticker,
+        inserted,
+        updated,
     )
     return {
         "ticker": ticker,

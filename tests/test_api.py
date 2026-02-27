@@ -334,9 +334,7 @@ def test_ingest_financials_success(client):
     _create_company(client, ticker, "Apple Inc.")
 
     summary = {"ticker": ticker, "cik": "0000320193", "inserted": 5, "updated": 0}
-    with patch(
-        "main.ingest_company_financials", new_callable=AsyncMock
-    ) as mock_ingest:
+    with patch("main.ingest_company_financials", new_callable=AsyncMock) as mock_ingest:
         mock_ingest.return_value = summary
         response = client.post(f"/companies/{ticker}/financials")
 
@@ -356,9 +354,7 @@ def test_ingest_financials_edgar_error(client):
     ticker = "MSFT"
     _create_company(client, ticker, "Microsoft")
 
-    with patch(
-        "main.ingest_company_financials", new_callable=AsyncMock
-    ) as mock_ingest:
+    with patch("main.ingest_company_financials", new_callable=AsyncMock) as mock_ingest:
         mock_ingest.side_effect = EdgarClientError("EDGAR API unavailable")
         response = client.post(f"/companies/{ticker}/financials")
 

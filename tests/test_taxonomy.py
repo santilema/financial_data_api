@@ -29,8 +29,11 @@ def test_priority_resolution():
     """Higher-priority tag (RevenueFromContract...) wins over Revenues for same period."""
     facts = normalize_company_facts(1, _load_fixture())
     fy_revenue = [
-        f for f in facts
-        if f.metric == "revenue" and f.period_type == "FY" and str(f.end_date) == "2023-09-30"
+        f
+        for f in facts
+        if f.metric == "revenue"
+        and f.period_type == "FY"
+        and str(f.end_date) == "2023-09-30"
     ]
     assert len(fy_revenue) == 1
     assert fy_revenue[0].value == 383285000000

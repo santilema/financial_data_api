@@ -52,9 +52,7 @@ async def add_new_company(ticker: str, db: Session = Depends(get_session)):
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if db_company:
         logger.warning(f"Company {ticker} already exists.")
-        raise HTTPException(
-            status_code=400, detail=f"Company {ticker} already exists."
-        )
+        raise HTTPException(status_code=400, detail=f"Company {ticker} already exists.")
 
     # fetch from client
     try:
@@ -192,9 +190,7 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
         )
 
     # find latest date in db
-    latest_date = repository.get_latest_date_for_company(
-        db, company_id=db_company.id
-    )
+    latest_date = repository.get_latest_date_for_company(db, company_id=db_company.id)
 
     if not latest_date:
         logger.error("No price data found to sync.")
