@@ -63,6 +63,11 @@ TAXONOMY: dict[str, list[str]] = {
     "dividends_per_share": [
         "CommonStockDividendsPerShareDeclared",
     ],
+    "depreciation_amortization": [
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+        "DepreciationAndAmortization",
+    ],
 }
 
 # Reverse lookup: xbrl_tag -> (canonical_metric, priority_index)

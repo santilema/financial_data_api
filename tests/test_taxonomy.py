@@ -84,6 +84,22 @@ def test_seed_data_format():
         assert "description" in entry
 
 
+def test_depreciation_amortization_metric():
+    """depreciation_amortization should be in taxonomy with expected XBRL tags."""
+    assert "depreciation_amortization" in TAXONOMY
+    expected_tags = {
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+        "DepreciationAndAmortization",
+    }
+    assert set(TAXONOMY["depreciation_amortization"]) == expected_tags
+
+    tag_map = get_tag_to_metric_map()
+    for tag in expected_tags:
+        assert tag in tag_map
+        assert tag_map[tag][0] == "depreciation_amortization"
+
+
 def test_q1_period_type():
     facts = normalize_company_facts(1, _load_fixture())
     q1_revenue = [f for f in facts if f.metric == "revenue" and f.period_type == "Q1"]
