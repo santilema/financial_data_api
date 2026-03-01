@@ -635,3 +635,145 @@ def test_get_financials_fields_with_standard_format(client, engine):
     assert "net_income" in data[0]
     assert data[0]["revenue"] == 250_000_000
 
+
+# --- Data Freshness _meta ---
+
+
+def test_meta_minimal_format_keys(client, engine):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=100_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+            filing_date=date(2025, 2, 15),
+            source="edgar",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    assert response.status_code == 200
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fy" in meta
+    assert "filed" in meta
+    assert "src" in meta
+    assert "age_days" in meta
+    assert meta["fy"] == 2024
+    assert meta["filed"] == "2025-02-15"
+    assert meta["src"] == "edgar"
+    assert isinstance(meta["age_days"], int)
+
+
+def test_meta_standard_format_keys(client, engine):
+    ticker = "MSFT"
+    _create_company(client, ticker, "Microsoft")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=200_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+            filing_date=date(2025, 2, 20),
+            source="edgar",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=standard")
+    assert response.status_code == 200
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fiscal_year" in meta
+    assert "filed_date" in meta
+    assert "source" in meta
+    assert "data_age_days" in meta
+    assert meta["fiscal_year"] == 2024
+    assert meta["filed_date"] == "2025-02-20"
+
+
+def test_meta_none_filing_date(client, engine):
+    ticker = "GOOG"
+    _create_company(client, ticker, "Google")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=150_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    assert response.status_code == 200
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert meta["age_days"] is None
+    assert meta["filed"] is None
+
+
+def test_meta_quarterly_includes_fq(client, engine):
+    ticker = "META"
+    _create_company(client, ticker, "Meta")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=50_000_000,
+            unit="USD",
+            end_date=date(2024, 3, 31),
+            period_type="Q1",
+            filing_date=date(2024, 5, 1),
+            source="edgar",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fq" in meta
+    assert meta["fq"] == "Q1"
+    assert "fy" not in meta
+
+    response = client.get(f"/companies/{ticker}/financials?format=standard")
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fiscal_quarter" in meta
+    assert meta["fiscal_quarter"] == "Q1"
+    assert "fiscal_year" not in meta
+

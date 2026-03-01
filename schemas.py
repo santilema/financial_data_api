@@ -1,5 +1,5 @@
 from typing import Literal
-from datetime import date
+from datetime import date, timedelta
 
 MINIMAL_TO_STANDARD: dict[str, str] = {
     "rev": "revenue",
@@ -137,6 +137,41 @@ def _build_row(fact, format: str) -> dict:
     return row
 
 
+def _build_meta(
+    facts: list,
+    format: Literal["minimal", "standard", "verbose"],
+    end_date: date,
+    period_type: str,
+) -> dict:
+    filing_dates = [f.filing_date for f in facts if f.filing_date is not None]
+    latest_filing = max(filing_dates) if filing_dates else None
+
+    sources = [f.source for f in facts if f.source is not None]
+    latest_source = sources[-1] if sources else "edgar"
+
+    fy = end_date.year if period_type.startswith("FY") else None
+    fq = period_type if period_type.startswith("Q") else None
+
+    age = (date.today() - latest_filing).days if latest_filing is not None else None
+
+    if format == "minimal":
+        meta: dict = {"src": latest_source, "age_days": age}
+        if fy is not None:
+            meta["fy"] = fy
+        if fq is not None:
+            meta["fq"] = fq
+        meta["filed"] = str(latest_filing) if latest_filing else None
+    else:
+        meta = {"source": latest_source, "data_age_days": age}
+        if fy is not None:
+            meta["fiscal_year"] = fy
+        if fq is not None:
+            meta["fiscal_quarter"] = fq
+        meta["filed_date"] = str(latest_filing) if latest_filing else None
+
+    return meta
+
+
 def transform_financials_by_period(
     facts: list,
     format: Literal["minimal", "standard", "verbose"] = "minimal",
@@ -149,6 +184,7 @@ def transform_financials_by_period(
     requested_metrics = _resolve_fields(fields)
 
     grouped: dict[tuple, dict] = {}
+    group_facts: dict[tuple, list] = {}
     for fact in facts:
         if requested_metrics and fact.metric not in requested_metrics:
             continue
@@ -156,10 +192,16 @@ def transform_financials_by_period(
         key = (fact.end_date, fact.period_type)
         if key not in grouped:
             grouped[key] = {"end": str(fact.end_date), "period": fact.period_type}
+            group_facts[key] = []
             if ticker:
                 grouped[key]["ticker"] = ticker
 
+        group_facts[key].append(fact)
         _add_to_row(grouped[key], fact, format)
+
+    for key, row in grouped.items():
+        end_date, period_type = key
+        row["_meta"] = _build_meta(group_facts[key], format, end_date, period_type)
 
     return list(grouped.values())
 
