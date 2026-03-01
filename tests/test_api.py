@@ -384,12 +384,13 @@ def test_get_financials_success(client, engine):
         db.add(fact)
         db.commit()
 
-    response = client.get(f"/companies/{ticker}/financials")
+    response = client.get(f"/companies/{ticker}/financials?format=verbose")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
-    assert data[0]["metric"] == "revenue"
     assert data[0]["period_type"] == "FY"
+    assert len(data[0]["metrics"]) == 1
+    assert data[0]["metrics"][0]["metric"] == "revenue"
 
 
 def test_get_financials_with_filters(client, engine):
@@ -433,15 +434,15 @@ def test_get_financials_with_filters(client, engine):
         db.commit()
 
     # filter by metric only
-    response = client.get(f"/companies/{ticker}/financials?metric=revenue")
+    response = client.get(f"/companies/{ticker}/financials?metric=revenue&format=verbose")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
-    assert all(d["metric"] == "revenue" for d in data)
+    assert all(d["metrics"][0]["metric"] == "revenue" for d in data)
 
     # filter by metric and period_type
     response = client.get(
-        f"/companies/{ticker}/financials?metric=revenue&period_type=FY"
+        f"/companies/{ticker}/financials?metric=revenue&period_type=FY&format=verbose"
     )
     data = response.json()
     assert len(data) == 1
@@ -469,3 +470,168 @@ def test_get_taxonomy_filtered(client):
     data = response.json()
     assert len(data) > 0
     assert all(d["metric"] == "revenue" for d in data)
+
+
+def test_get_financials_format_minimal(client, engine):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=100_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=20_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "rev" in data[0]
+    assert "ni" in data[0]
+    assert data[0]["rev"] == 100_000_000
+    assert "period" in data[0]
+    assert "end" in data[0]
+
+
+def test_get_financials_format_standard(client, engine):
+    ticker = "MSFT"
+    _create_company(client, ticker, "Microsoft")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=200_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=standard")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "revenue" in data[0]
+    assert data[0]["revenue"] == 200_000_000
+    assert "period_type" in data[0]
+    assert "end_date" in data[0]
+
+
+def test_get_financials_fields_filter(client, engine):
+    ticker = "GOOG"
+    _create_company(client, ticker, "Google")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=300_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=50_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="total_assets",
+                value=400_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?fields=rev,ni")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "rev" in data[0]
+    assert "ni" in data[0]
+    assert "ta" not in data[0]
+
+
+def test_get_financials_fields_with_standard_format(client, engine):
+    ticker = "NVDA"
+    _create_company(client, ticker, "NVIDIA")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=250_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=75_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=standard&fields=rev,ni")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "revenue" in data[0]
+    assert "net_income" in data[0]
+    assert data[0]["revenue"] == 250_000_000
+

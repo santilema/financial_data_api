@@ -2,12 +2,13 @@ import logging
 from fastapi import FastAPI, Depends, HTTPException, Query
 from contextlib import asynccontextmanager
 from sqlmodel import SQLModel, Session
-from typing import List
+from typing import List, Literal
 from datetime import date, timedelta
 
 from database import engine, get_session
 from models import Company, DailyPrice, FinancialFact, TaxonomyMapping
 import repository
+import schemas
 from services import yfinance_client
 from services.edgar_pipeline import seed_taxonomy, ingest_company_financials
 from services.edgar_client import EdgarClientError
@@ -243,16 +244,19 @@ async def ingest_financials(ticker: str, db: Session = Depends(get_session)):
     return result
 
 
-@app.get("/companies/{ticker}/financials", response_model=List[FinancialFact])
+@app.get("/companies/{ticker}/financials")
 async def get_financials(
     ticker: str,
     metric: str | None = Query(None),
     period_type: str | None = Query(None),
+    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
+    fields: str | None = Query(None),
     db: Session = Depends(get_session),
 ):
     """
     Gets stored financial facts for a given company,
     optionally filtered by metric and period type.
+    Supports format=minimal|standard|verbose and fields=rev,ni,eps.
     """
     logger.info(f"Request received to get financials for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
@@ -266,7 +270,14 @@ async def get_financials(
 
     facts = repository.get_financial_facts(db, db_company.id, metric, period_type)
     logger.info(f"Financials for {ticker} retrieved successfully")
-    return facts
+
+    field_list = fields.split(",") if fields else None
+    return schemas.transform_financials_by_period(
+        facts,
+        format=format,  # type: ignore[arg-type]
+        fields=field_list,
+        ticker=ticker,
+    )
 
 
 @app.get("/taxonomy", response_model=List[TaxonomyMapping])
