@@ -1,5 +1,7 @@
 from typing import Literal
 from datetime import date, timedelta
+from fastapi import HTTPException
+from pydantic import BaseModel
 
 MINIMAL_TO_STANDARD: dict[str, str] = {
     "rev": "revenue",
@@ -204,6 +206,21 @@ def transform_financials_by_period(
         row["_meta"] = _build_meta(group_facts[key], format, end_date, period_type)
 
     return list(grouped.values())
+
+
+class ApiError(BaseModel):
+    error: str
+    message: str
+    ticker: str | None = None
+    field: str | None = None
+    detail: str | None = None
+
+
+class ApiException(HTTPException):
+    def __init__(self, status_code: int, error: str, message: str, **ctx):
+        super().__init__(status_code=status_code, detail=message)
+        self.error = error
+        self.ctx = ctx
 
 
 def _add_to_row(row: dict, fact, format: str) -> None:

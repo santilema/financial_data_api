@@ -54,7 +54,8 @@ def test_add_duplicate_company(client):
     response = client.post(f"/companies/{ticker}")
 
     assert response.status_code == 400
-    assert "already exists" in response.json()["detail"]
+    assert response.json()["error"] == "already_exists"
+    assert response.json()["ticker"] == ticker
 
 
 def test_add_company_yfinance_failure(client):
@@ -65,6 +66,8 @@ def test_add_company_yfinance_failure(client):
         response = client.post(f"/companies/{ticker}")
 
     assert response.status_code == 400
+    assert response.json()["error"] == "ingestion_failed"
+    assert response.json()["ticker"] == ticker
     assert "Ticker not found" in response.json()["detail"]
 
 
@@ -168,7 +171,8 @@ def test_get_prices_invalid_range(client):
 
     response = client.get(f"/prices/{ticker}?from=2022-02-01&until=2022-01-01")
     assert response.status_code == 400
-    assert "must be on or before" in response.json()["detail"]
+    assert response.json()["error"] == "invalid_params"
+    assert response.json()["field"] == "from"
 
 
 # --- Sync Logic ---
@@ -359,6 +363,8 @@ def test_ingest_financials_edgar_error(client):
         response = client.post(f"/companies/{ticker}/financials")
 
     assert response.status_code == 400
+    assert response.json()["error"] == "ingestion_failed"
+    assert response.json()["ticker"] == ticker
     assert "EDGAR API unavailable" in response.json()["detail"]
 
 
@@ -738,6 +744,59 @@ def test_meta_none_filing_date(client, engine):
     meta = data[0]["_meta"]
     assert meta["age_days"] is None
     assert meta["filed"] is None
+
+
+# --- Error Response Schema ---
+
+
+def test_error_schema_not_found(client):
+    response = client.get("/companies/ZZZZ/financials")
+    assert response.status_code == 404
+    data = response.json()
+    assert data["error"] == "not_found"
+    assert "message" in data
+    assert data["ticker"] == "ZZZZ"
+    assert "detail" not in data or data.get("detail") is None
+
+
+def test_error_schema_already_exists(client):
+    ticker = "SCHM"
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (Company(ticker=ticker, name="Schm Corp"), [])
+        client.post(f"/companies/{ticker}")
+
+    response = client.post(f"/companies/{ticker}")
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"] == "already_exists"
+    assert "message" in data
+    assert data["ticker"] == ticker
+
+
+def test_error_schema_ingestion_failed(client):
+    ticker = "BADINC"
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.side_effect = YahooFinanceError("Symbol not found")
+        response = client.post(f"/companies/{ticker}")
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"] == "ingestion_failed"
+    assert "message" in data
+    assert data["ticker"] == ticker
+    assert "Symbol not found" in data["detail"]
+
+
+def test_error_schema_invalid_params(client, engine):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple")
+
+    response = client.get(f"/companies/{ticker}/financials?format=bad")
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error"] == "invalid_params"
+    assert "message" in data
+    assert "format" in data["field"]
 
 
 def test_meta_quarterly_includes_fq(client, engine):

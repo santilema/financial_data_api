@@ -1,5 +1,7 @@
 import logging
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, Query
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 from sqlmodel import SQLModel, Session
 from typing import List, Literal
@@ -9,6 +11,7 @@ from database import engine, get_session
 from models import Company, DailyPrice, FinancialFact, TaxonomyMapping
 import repository
 import schemas
+from schemas import ApiException
 from services import yfinance_client
 from services.edgar_pipeline import seed_taxonomy, ingest_company_financials
 from services.edgar_client import EdgarClientError
@@ -38,6 +41,24 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+@app.exception_handler(ApiException)
+async def api_exception_handler(request, exc: ApiException):
+    body = {"error": exc.error, "message": exc.detail}
+    body.update({k: v for k, v in exc.ctx.items() if v is not None})
+    return JSONResponse(status_code=exc.status_code, content=body)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    first = exc.errors()[0] if exc.errors() else {}
+    return JSONResponse(status_code=422, content={
+        "error": "invalid_params",
+        "message": "Invalid request parameters",
+        "field": ".".join(str(x) for x in first.get("loc", [])),
+        "detail": first.get("msg", ""),
+    })
+
+
 @app.get("/")
 def read_root():
     return {"message": "Hello world :D"}
@@ -53,7 +74,7 @@ async def add_new_company(ticker: str, db: Session = Depends(get_session)):
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if db_company:
         logger.warning(f"Company {ticker} already exists.")
-        raise HTTPException(status_code=400, detail=f"Company {ticker} already exists.")
+        raise ApiException(status_code=400, error="already_exists", message=f"Company {ticker} already exists.", ticker=ticker)
 
     # fetch from client
     try:
@@ -61,16 +82,14 @@ async def add_new_company(ticker: str, db: Session = Depends(get_session)):
         company, prices = await yfinance_client.fetch_daily_data(ticker)
     except yfinance_client.YahooFinanceError as e:
         logger.error(f"Failed to fetch data for {ticker}: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise ApiException(status_code=400, error="ingestion_failed", message=f"Failed to fetch data for {ticker}.", ticker=ticker, detail=str(e))
 
     # store in db
     db_company = repository.create_company(db, company=company)
     for price in prices:
         if not db_company.id:
             logger.error(f"Failed to retrieve ID for company {ticker}")
-            raise HTTPException(
-                500, detail="Something went wrong when retrieving new company id."
-            )
+            raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving new company id.")
         price.company_id = db_company.id
 
     repository.save_daily_prices(db, prices=prices)
@@ -103,12 +122,9 @@ async def get_prices_for_ticker(
     logger.info(f"Request received to get prices for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
     if not db_company.id:
-        raise HTTPException(
-            status_code=500,
-            detail="Something went wrong when retrieving company id.",
-        )
+        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
 
     # Default bounds to full history if one side is missing
     if from_date is None:
@@ -121,9 +137,7 @@ async def get_prices_for_ticker(
         )
 
     if from_date and until_date and from_date > until_date:
-        raise HTTPException(
-            status_code=400, detail="'from' must be on or before 'until'."
-        )
+        raise ApiException(status_code=400, error="invalid_params", message="'from' must be on or before 'until'.", field="from")
 
     prices = repository.get_prices_for_company(
         db,
@@ -144,12 +158,9 @@ async def delete_company(ticker: str, db: Session = Depends(get_session)):
     logger.info(f"Request received to delete company {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
     if not db_company.id:
-        raise HTTPException(
-            status_code=500,
-            detail="Something went wrong when retrieving company id.",
-        )
+        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
 
     prices_deleted, companies_deleted = repository.delete_company_and_prices(
         db, company_id=db_company.id
@@ -157,10 +168,7 @@ async def delete_company(ticker: str, db: Session = Depends(get_session)):
 
     if companies_deleted == 0:
         logger.error(f"Failed to delete company {db_company.ticker} after found.")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete company {db_company.ticker}.",
-        )
+        raise ApiException(status_code=500, error="internal_error", message=f"Failed to delete company {db_company.ticker}.")
     logger.info(f"Company {db_company.ticker} deleted successfully")
 
     return {
@@ -180,22 +188,16 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     # find the company
     db_company = repository.get_company_by_ticker(db, ticker)
     if not db_company:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Company {ticker} not found. POST to /companies/{ticker} first.",
-        )
+        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
     if not db_company.id:
-        raise HTTPException(
-            status_code=500,
-            detail="Something went wrong when retrieving company id.",
-        )
+        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
 
     # find latest date in db
     latest_date = repository.get_latest_date_for_company(db, company_id=db_company.id)
 
     if not latest_date:
         logger.error("No price data found to sync.")
-        return HTTPException(status_code=400, detail="No price data found to sync.")
+        raise ApiException(status_code=400, error="invalid_params", message="No price data found to sync.", ticker=ticker)
 
     # is already up-to-date?
     if latest_date >= (date.today() - timedelta(days=1)):
@@ -209,7 +211,7 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
         )
     except yfinance_client.YahooFinanceError as e:
         logger.error(f"Failed to fetch new data: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch new data: {e}")
+        raise ApiException(status_code=500, error="internal_error", message="Failed to fetch new data.", detail=str(e))
 
     if not new_prices:
         logger.info("Data is already up-to-date")
@@ -232,13 +234,13 @@ async def ingest_financials(ticker: str, db: Session = Depends(get_session)):
     logger.info(f"Request received to ingest financials for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
 
     try:
         result = await ingest_company_financials(db, ticker)
     except EdgarClientError as e:
         logger.error(f"EDGAR ingestion failed for {ticker}: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise ApiException(status_code=400, error="ingestion_failed", message=f"EDGAR ingestion failed for {ticker}.", ticker=ticker, detail=str(e))
 
     logger.info(f"Ingestion complete for {ticker}")
     return result
@@ -261,12 +263,9 @@ async def get_financials(
     logger.info(f"Request received to get financials for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise HTTPException(status_code=404, detail=f"Company {ticker} not found.")
+        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
     if not db_company.id:
-        raise HTTPException(
-            status_code=500,
-            detail="Something went wrong when retrieving company id.",
-        )
+        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
 
     facts = repository.get_financial_facts(db, db_company.id, metric, period_type)
     logger.info(f"Financials for {ticker} retrieved successfully")
