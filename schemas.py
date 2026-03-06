@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 from datetime import date, timedelta
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -221,6 +221,235 @@ class ApiException(HTTPException):
         super().__init__(status_code=status_code, detail=message)
         self.error = error
         self.ctx = ctx
+
+
+RATIO_STANDARD_KEYS = [
+    "price_to_earnings",
+    "price_to_book",
+    "debt_to_equity",
+    "gross_margin",
+    "operating_margin",
+    "net_margin",
+    "return_on_equity",
+    "ebitda",
+    "free_cash_flow",
+    "current_ratio",
+]
+
+COMPARISON_FACT_METRICS: list[str] = [
+    "revenue",
+    "net_income",
+    "gross_profit",
+    "operating_income",
+    "eps_basic",
+    "eps_diluted",
+    "total_assets",
+    "total_liabilities",
+    "stockholders_equity",
+    "cash_and_equivalents",
+    "operating_cash_flow",
+    "investing_cash_flow",
+    "financing_cash_flow",
+    "cost_of_revenue",
+    "shares_outstanding",
+    "dividends_per_share",
+]
+
+
+def _build_ratios_meta(inputs, format: str) -> dict:
+    age = (date.today() - inputs.filing_date).days if inputs.filing_date else None
+    fy = inputs.fy_end_date.year if inputs.fy_end_date else None
+    price_date = str(inputs.price_date) if inputs.price_date else None
+    filed = str(inputs.filing_date) if inputs.filing_date else None
+    source = inputs.source or "edgar"
+
+    if format == "minimal":
+        return {
+            "src": source,
+            "age_days": age,
+            "filed": filed,
+            "fy": fy,
+            "price_date": price_date,
+        }
+    else:
+        return {
+            "source": source,
+            "data_age_days": age,
+            "filed_date": filed,
+            "fiscal_year": fy,
+            "price_date": price_date,
+        }
+
+
+def transform_ratios(
+    ratios,
+    inputs,
+    ticker: str,
+    format: Literal["minimal", "standard", "verbose"] = "minimal",
+    fields: Optional[list[str]] = None,
+) -> dict:
+    raw = {k: getattr(ratios, k) for k in RATIO_STANDARD_KEYS}
+
+    requested_metrics = _resolve_fields(fields) if fields else None
+
+    result: dict = {"ticker": ticker}
+
+    for standard_key, value in raw.items():
+        if requested_metrics and standard_key not in requested_metrics:
+            continue
+        if format == "minimal":
+            out_key = STANDARD_TO_MINIMAL.get(standard_key, standard_key)
+        else:
+            out_key = standard_key
+        result[out_key] = value
+
+    result["_meta"] = _build_ratios_meta(inputs, format)
+    return result
+
+
+def _build_profile_meta(inputs, price_row, format: str) -> dict:
+    has_facts = inputs is not None
+    has_price = price_row is not None
+
+    if has_facts and has_price:
+        source = "edgar+yfinance"
+    elif has_facts:
+        source = "edgar"
+    elif has_price:
+        source = "yfinance"
+    else:
+        source = "edgar"
+
+    fy = inputs.fy_end_date.year if has_facts and inputs.fy_end_date else None
+    filed = str(inputs.filing_date) if has_facts and inputs.filing_date else None
+    age = (date.today() - inputs.filing_date).days if has_facts and inputs.filing_date else None
+    price_date = str(price_row.date) if has_price else None
+
+    if format == "minimal":
+        return {
+            "src": source,
+            "age_days": age,
+            "filed": filed,
+            "fy": fy,
+            "price_date": price_date,
+        }
+    else:
+        return {
+            "source": source,
+            "data_age_days": age,
+            "filed_date": filed,
+            "fiscal_year": fy,
+            "price_date": price_date,
+        }
+
+
+def transform_company_profile(
+    company,
+    ratios,
+    inputs,
+    price_row,
+    ticker: str,
+    format: Literal["minimal", "standard", "verbose"] = "minimal",
+) -> dict:
+    has_facts = inputs is not None
+    has_price = price_row is not None
+
+    result: dict = {
+        "ticker": ticker,
+        "name": company.name,
+        "sector": company.sector,
+        "industry": company.industry,
+        "exchange": company.exchange,
+        "cik": company.cik,
+    }
+
+    if has_price:
+        mkt_cap = (
+            price_row.close * inputs.shares_outstanding
+            if has_facts and inputs.shares_outstanding is not None
+            else None
+        )
+        result["price"] = price_row.close
+        if format == "minimal":
+            result["mkt_cap"] = mkt_cap
+        else:
+            result["market_cap"] = mkt_cap
+
+    if has_facts:
+        eps_val = inputs.eps_diluted if inputs.eps_diluted is not None else inputs.eps_basic
+        gm_val = ratios.gross_margin if ratios is not None else None
+        if format == "minimal":
+            result["rev"] = inputs.revenue
+            result["ni"] = inputs.net_income
+            result["eps"] = eps_val
+            result["gm"] = gm_val
+        else:
+            result["revenue"] = inputs.revenue
+            result["net_income"] = inputs.net_income
+            result["eps_diluted"] = eps_val
+            result["gross_margin"] = gm_val
+
+    if has_facts and has_price:
+        pe_val = ratios.price_to_earnings if ratios is not None else None
+        if format == "minimal":
+            result["pe"] = pe_val
+        else:
+            result["price_to_earnings"] = pe_val
+
+    result["_meta"] = _build_profile_meta(inputs, price_row, format)
+    return result
+
+
+def _build_ticker_flat(facts: list, ratios) -> dict:
+    fact_map = {f.metric: f.value for f in facts}
+    result: dict = {}
+    for key in COMPARISON_FACT_METRICS:
+        result[key] = fact_map.get(key)
+    for key in RATIO_STANDARD_KEYS:
+        result[key] = getattr(ratios, key, None) if ratios is not None else None
+    return result
+
+
+def transform_comparison(
+    ticker_results: list[dict],
+    requested_metrics: list[str] | None,
+    format: str,
+) -> dict:
+    if requested_metrics:
+        active_std = [MINIMAL_TO_STANDARD.get(m, m) for m in requested_metrics]
+    else:
+        active_std = COMPARISON_FACT_METRICS + RATIO_STANDARD_KEYS
+
+    data: dict = {}
+    fy_used: dict = {}
+    not_found: list[str] = []
+
+    for item in ticker_results:
+        ticker = item["ticker"]
+        if not item["found"]:
+            row = {key: None for key in active_std}
+            not_found.append(ticker)
+            fy_used[ticker] = None
+        else:
+            flat = _build_ticker_flat(item["facts"], item["ratios"])
+            row = {key: flat.get(key) for key in active_std}
+            inputs = item["inputs"]
+            fy_used[ticker] = inputs.fy_end_date.year if inputs and inputs.fy_end_date else None
+
+        if format == "minimal":
+            row = {STANDARD_TO_MINIMAL.get(k, k): v for k, v in row.items()}
+        data[ticker] = row
+
+    if format == "minimal":
+        metrics = [STANDARD_TO_MINIMAL.get(k, k) for k in active_std]
+    else:
+        metrics = list(active_std)
+
+    meta: dict = {"fy_used": fy_used}
+    if not_found:
+        meta["not_found"] = not_found
+
+    return {"metrics": metrics, "data": data, "_meta": meta}
 
 
 def _add_to_row(row: dict, fact, format: str) -> None:

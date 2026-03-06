@@ -15,6 +15,7 @@ from schemas import ApiException
 from services import yfinance_client
 from services.edgar_pipeline import seed_taxonomy, ingest_company_financials
 from services.edgar_client import EdgarClientError
+from services.ratios import build_ratio_inputs_from_facts, compute_ratios
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -106,6 +107,82 @@ async def get_all_companies(db: Session = Depends(get_session)):
     logger.info("Request received to get all companies")
     db_companies = repository.get_all_companies(db)
     return db_companies
+
+
+@app.get("/companies/{ticker}")
+async def get_company_profile(
+    ticker: str,
+    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
+    db: Session = Depends(get_session),
+):
+    """
+    Returns a compact company profile: metadata, latest financials, and key ratios.
+    """
+    logger.info(f"Request received to get profile for {ticker}")
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if not db_company:
+        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+    if not db_company.id:
+        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+
+    facts = repository.get_latest_fy_facts(db, db_company.id)
+    price_row = repository.get_latest_price(db, db_company.id)
+
+    if facts:
+        price = price_row.close if price_row else None
+        price_date = price_row.date if price_row else None
+        inputs = build_ratio_inputs_from_facts(facts, price=price, price_date=price_date)
+        ratios = compute_ratios(inputs)
+    else:
+        inputs, ratios = None, None
+
+    return schemas.transform_company_profile(
+        db_company, ratios, inputs, price_row, ticker, format  # type: ignore[arg-type]
+    )
+
+
+@app.get("/compare")
+async def compare_companies(
+    tickers: str = Query(...),
+    metrics: str | None = Query(None),
+    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
+    db: Session = Depends(get_session),
+):
+    """
+    Returns a matrix comparison of key metrics across multiple companies.
+    """
+    raw = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    ticker_list = list(dict.fromkeys(raw))
+
+    if not ticker_list:
+        raise ApiException(status_code=422, error="invalid_params", message="At least one ticker is required.", field="tickers")
+    if len(ticker_list) > 10:
+        raise ApiException(status_code=422, error="invalid_params", message="At most 10 tickers are allowed.", field="tickers")
+
+    ticker_results = []
+    for ticker in ticker_list:
+        company = repository.get_company_by_ticker(db, ticker=ticker)
+        if not company or not company.id:
+            ticker_results.append({"ticker": ticker, "found": False, "facts": [], "ratios": None, "inputs": None})
+            continue
+
+        facts = repository.get_latest_fy_facts(db, company.id)
+        price_row = repository.get_latest_price(db, company.id)
+
+        if facts:
+            inputs = build_ratio_inputs_from_facts(
+                facts,
+                price=price_row.close if price_row else None,
+                price_date=price_row.date if price_row else None,
+            )
+            ratios = compute_ratios(inputs)
+        else:
+            inputs, ratios = None, None
+
+        ticker_results.append({"ticker": ticker, "found": True, "facts": facts, "ratios": ratios, "inputs": inputs})
+
+    metric_list = metrics.split(",") if metrics else None
+    return schemas.transform_comparison(ticker_results, metric_list, format)
 
 
 @app.get("/prices/{ticker}", response_model=List[DailyPrice])
@@ -277,6 +354,38 @@ async def get_financials(
         fields=field_list,
         ticker=ticker,
     )
+
+
+@app.get("/companies/{ticker}/ratios")
+async def get_ratios(
+    ticker: str,
+    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
+    fields: str | None = Query(None),
+    db: Session = Depends(get_session),
+):
+    """
+    Returns computed financial ratios for the most recent FY data.
+    """
+    logger.info(f"Request received to get ratios for {ticker}")
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if not db_company:
+        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+    if not db_company.id:
+        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+
+    facts = repository.get_latest_fy_facts(db, db_company.id)
+    if not facts:
+        raise ApiException(status_code=404, error="not_found", message=f"No annual (FY) financial data found for {ticker}.", ticker=ticker)
+
+    price_row = repository.get_latest_price(db, db_company.id)
+    price = price_row.close if price_row else None
+    price_date = price_row.date if price_row else None
+
+    inputs = build_ratio_inputs_from_facts(facts, price=price, price_date=price_date)
+    ratios = compute_ratios(inputs)
+
+    field_list = fields.split(",") if fields else None
+    return schemas.transform_ratios(ratios, inputs, ticker, format=format, fields=field_list)  # type: ignore[arg-type]
 
 
 @app.get("/taxonomy", response_model=List[TaxonomyMapping])

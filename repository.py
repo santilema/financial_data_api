@@ -194,3 +194,33 @@ def get_taxonomy_mappings(
     if metric:
         statement = statement.where(TaxonomyMapping.metric == metric)
     return db.exec(statement).all()
+
+
+def get_latest_fy_facts(db: Session, company_id: int) -> List[FinancialFact]:
+    latest_end = db.exec(
+        select(FinancialFact.end_date)
+        .where(
+            FinancialFact.company_id == company_id,
+            FinancialFact.period_type == "FY",
+        )
+        .order_by(FinancialFact.end_date.desc())
+    ).first()
+
+    if latest_end is None:
+        return []
+
+    return db.exec(
+        select(FinancialFact).where(
+            FinancialFact.company_id == company_id,
+            FinancialFact.period_type == "FY",
+            FinancialFact.end_date == latest_end,
+        )
+    ).all()
+
+
+def get_latest_price(db: Session, company_id: int) -> DailyPrice | None:
+    return db.exec(
+        select(DailyPrice)
+        .where(DailyPrice.company_id == company_id)
+        .order_by(DailyPrice.date.desc())
+    ).first()
