@@ -8,6 +8,7 @@ from typing import List, Literal
 from datetime import date, timedelta
 
 from database import engine, get_session
+from admin import router as admin_router
 from models import Company, DailyPrice, FinancialFact, TaxonomyMapping
 import repository
 import schemas
@@ -40,6 +41,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(admin_router)
 
 
 @app.exception_handler(ApiException)
@@ -238,6 +240,17 @@ async def compare_companies(
 
     metric_list = metrics.split(",") if metrics else None
     return schemas.transform_comparison(ticker_results, metric_list, format)
+
+
+@app.get("/search")
+async def search_companies(
+    q: str | None = Query(None),
+    sector: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_session),
+):
+    results = repository.search_companies(db, q=q, sector=sector, limit=limit)
+    return [{"ticker": c.ticker, "name": c.name, "sector": c.sector} for c in results]
 
 
 @app.get("/prices/{ticker}", response_model=List[DailyPrice])

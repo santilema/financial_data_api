@@ -1,4 +1,5 @@
 from sqlmodel import Session, select, delete
+from sqlalchemy import or_, func
 from models import Company, DailyPrice, FinancialFact, TaxonomyMapping
 from typing import List
 from datetime import date
@@ -216,6 +217,27 @@ def get_latest_fy_facts(db: Session, company_id: int) -> List[FinancialFact]:
             FinancialFact.end_date == latest_end,
         )
     ).all()
+
+
+def search_companies(
+    db: Session, q: str | None, sector: str | None, limit: int
+) -> list[Company]:
+    statement = select(Company)
+    if q:
+        q_lower = q.lower()
+        statement = statement.where(
+            or_(
+                func.lower(Company.ticker).contains(q_lower),
+                func.lower(Company.name).contains(q_lower),
+            )
+        )
+    if sector:
+        statement = statement.where(func.lower(Company.sector) == sector.lower())
+    statement = statement.limit(limit * 2)
+    results = db.exec(statement).all()
+    if q:
+        results = sorted(results, key=lambda c: c.ticker.lower() != q.lower())
+    return results[:limit]
 
 
 def get_latest_price(db: Session, company_id: int) -> DailyPrice | None:
