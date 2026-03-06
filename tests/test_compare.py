@@ -97,16 +97,20 @@ def test_compare_not_found_key_absent_when_all_found(client, engine):
 
 def test_compare_single_ticker_minimal(client, engine):
     company_id = _create_company(client, "CMIN")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "net_income": 30_000.0,
-        "gross_profit": 80_000.0,
-        "eps_diluted": 5.0,
-        "shares_outstanding": 1_000_000.0,
-        "stockholders_equity": 500_000.0,
-        "total_liabilities": 200_000.0,
-        "operating_income": 40_000.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "net_income": 30_000.0,
+            "gross_profit": 80_000.0,
+            "eps_diluted": 5.0,
+            "shares_outstanding": 1_000_000.0,
+            "stockholders_equity": 500_000.0,
+            "total_liabilities": 200_000.0,
+            "operating_income": 40_000.0,
+        },
+    )
     _insert_price(engine, company_id, close=150.0, price_date=date(2024, 3, 1))
 
     response = client.get("/compare?tickers=CMIN")
@@ -132,10 +136,14 @@ def test_compare_single_ticker_minimal(client, engine):
 
 def test_compare_single_ticker_standard(client, engine):
     company_id = _create_company(client, "CSTD")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "net_income": 30_000.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "net_income": 30_000.0,
+        },
+    )
 
     response = client.get("/compare?tickers=CSTD&format=standard")
     assert response.status_code == 200
@@ -167,11 +175,15 @@ def test_compare_multi_ticker(client, engine):
 
 def test_compare_metrics_filter(client, engine):
     company_id = _create_company(client, "CFILT")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "gross_profit": 80_000.0,
-        "eps_diluted": 5.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "gross_profit": 80_000.0,
+            "eps_diluted": 5.0,
+        },
+    )
     _insert_price(engine, company_id, close=150.0, price_date=date(2024, 1, 1))
 
     response = client.get("/compare?tickers=CFILT&metrics=pe,gm")

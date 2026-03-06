@@ -98,13 +98,13 @@ def test_compute_ratios_all_present():
     r = compute_ratios(inputs)
 
     assert r.price_to_earnings == pytest.approx(30.0)  # 150 / 5
-    assert r.price_to_book == pytest.approx(300.0)     # (150 * 1e6) / 5e5
-    assert r.debt_to_equity == pytest.approx(0.4)      # 200k / 500k
-    assert r.gross_margin == pytest.approx(0.4)        # 80k / 200k
-    assert r.operating_margin == pytest.approx(0.2)    # 40k / 200k
-    assert r.net_margin == pytest.approx(0.15)         # 30k / 200k
-    assert r.return_on_equity == pytest.approx(0.06)   # 30k / 500k
-    assert r.ebitda == pytest.approx(50_000.0)         # 40k + 10k
+    assert r.price_to_book == pytest.approx(300.0)  # (150 * 1e6) / 5e5
+    assert r.debt_to_equity == pytest.approx(0.4)  # 200k / 500k
+    assert r.gross_margin == pytest.approx(0.4)  # 80k / 200k
+    assert r.operating_margin == pytest.approx(0.2)  # 40k / 200k
+    assert r.net_margin == pytest.approx(0.15)  # 30k / 200k
+    assert r.return_on_equity == pytest.approx(0.06)  # 30k / 500k
+    assert r.ebitda == pytest.approx(50_000.0)  # 40k + 10k
     assert r.free_cash_flow is None
     assert r.current_ratio is None
 
@@ -209,16 +209,20 @@ def test_get_ratios_no_fy_facts(client, engine):
 
 def test_get_ratios_success_minimal(client, engine):
     company_id = _create_company(client, "RTEST")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "gross_profit": 80_000.0,
-        "operating_income": 40_000.0,
-        "net_income": 30_000.0,
-        "stockholders_equity": 500_000.0,
-        "total_liabilities": 200_000.0,
-        "eps_diluted": 5.0,
-        "shares_outstanding": 1_000_000.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "gross_profit": 80_000.0,
+            "operating_income": 40_000.0,
+            "net_income": 30_000.0,
+            "stockholders_equity": 500_000.0,
+            "total_liabilities": 200_000.0,
+            "eps_diluted": 5.0,
+            "shares_outstanding": 1_000_000.0,
+        },
+    )
     _insert_price(engine, company_id, close=150.0, price_date=date(2024, 3, 1))
 
     response = client.get("/companies/RTEST/ratios")
@@ -261,12 +265,16 @@ def test_get_ratios_verbose_same_as_standard(client, engine):
 
 def test_get_ratios_no_price_data(client, engine):
     company_id = _create_company(client, "NOPRICE")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "gross_profit": 80_000.0,
-        "stockholders_equity": 500_000.0,
-        "total_liabilities": 200_000.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "gross_profit": 80_000.0,
+            "stockholders_equity": 500_000.0,
+            "total_liabilities": 200_000.0,
+        },
+    )
 
     response = client.get("/companies/NOPRICE/ratios")
     assert response.status_code == 200
@@ -280,12 +288,16 @@ def test_get_ratios_no_price_data(client, engine):
 
 def test_get_ratios_fields_filter(client, engine):
     company_id = _create_company(client, "RFILT")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "gross_profit": 80_000.0,
-        "net_income": 30_000.0,
-        "eps_diluted": 5.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "gross_profit": 80_000.0,
+            "net_income": 30_000.0,
+            "eps_diluted": 5.0,
+        },
+    )
     _insert_price(engine, company_id, close=150.0, price_date=date(2024, 1, 1))
 
     response = client.get("/companies/RFILT/ratios?fields=pe,gm")

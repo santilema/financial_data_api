@@ -322,7 +322,11 @@ def _build_profile_meta(inputs, price_row, format: str) -> dict:
 
     fy = inputs.fy_end_date.year if has_facts and inputs.fy_end_date else None
     filed = str(inputs.filing_date) if has_facts and inputs.filing_date else None
-    age = (date.today() - inputs.filing_date).days if has_facts and inputs.filing_date else None
+    age = (
+        (date.today() - inputs.filing_date).days
+        if has_facts and inputs.filing_date
+        else None
+    )
     price_date = str(price_row.date) if has_price else None
 
     if format == "minimal":
@@ -376,7 +380,9 @@ def transform_company_profile(
             result["market_cap"] = mkt_cap
 
     if has_facts:
-        eps_val = inputs.eps_diluted if inputs.eps_diluted is not None else inputs.eps_basic
+        eps_val = (
+            inputs.eps_diluted if inputs.eps_diluted is not None else inputs.eps_basic
+        )
         gm_val = ratios.gross_margin if ratios is not None else None
         if format == "minimal":
             result["rev"] = inputs.revenue
@@ -434,7 +440,9 @@ def transform_comparison(
             flat = _build_ticker_flat(item["facts"], item["ratios"])
             row = {key: flat.get(key) for key in active_std}
             inputs = item["inputs"]
-            fy_used[ticker] = inputs.fy_end_date.year if inputs and inputs.fy_end_date else None
+            fy_used[ticker] = (
+                inputs.fy_end_date.year if inputs and inputs.fy_end_date else None
+            )
 
         if format == "minimal":
             row = {STANDARD_TO_MINIMAL.get(k, k): v for k, v in row.items()}

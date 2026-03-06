@@ -52,12 +52,15 @@ async def api_exception_handler(request, exc: ApiException):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
     first = exc.errors()[0] if exc.errors() else {}
-    return JSONResponse(status_code=422, content={
-        "error": "invalid_params",
-        "message": "Invalid request parameters",
-        "field": ".".join(str(x) for x in first.get("loc", [])),
-        "detail": first.get("msg", ""),
-    })
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "invalid_params",
+            "message": "Invalid request parameters",
+            "field": ".".join(str(x) for x in first.get("loc", [])),
+            "detail": first.get("msg", ""),
+        },
+    )
 
 
 @app.get("/")
@@ -75,7 +78,12 @@ async def add_new_company(ticker: str, db: Session = Depends(get_session)):
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if db_company:
         logger.warning(f"Company {ticker} already exists.")
-        raise ApiException(status_code=400, error="already_exists", message=f"Company {ticker} already exists.", ticker=ticker)
+        raise ApiException(
+            status_code=400,
+            error="already_exists",
+            message=f"Company {ticker} already exists.",
+            ticker=ticker,
+        )
 
     # fetch from client
     try:
@@ -83,14 +91,24 @@ async def add_new_company(ticker: str, db: Session = Depends(get_session)):
         company, prices = await yfinance_client.fetch_daily_data(ticker)
     except yfinance_client.YahooFinanceError as e:
         logger.error(f"Failed to fetch data for {ticker}: {e}")
-        raise ApiException(status_code=400, error="ingestion_failed", message=f"Failed to fetch data for {ticker}.", ticker=ticker, detail=str(e))
+        raise ApiException(
+            status_code=400,
+            error="ingestion_failed",
+            message=f"Failed to fetch data for {ticker}.",
+            ticker=ticker,
+            detail=str(e),
+        )
 
     # store in db
     db_company = repository.create_company(db, company=company)
     for price in prices:
         if not db_company.id:
             logger.error(f"Failed to retrieve ID for company {ticker}")
-            raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving new company id.")
+            raise ApiException(
+                status_code=500,
+                error="internal_error",
+                message="Something went wrong when retrieving new company id.",
+            )
         price.company_id = db_company.id
 
     repository.save_daily_prices(db, prices=prices)
@@ -121,9 +139,18 @@ async def get_company_profile(
     logger.info(f"Request received to get profile for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
     if not db_company.id:
-        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Something went wrong when retrieving company id.",
+        )
 
     facts = repository.get_latest_fy_facts(db, db_company.id)
     price_row = repository.get_latest_price(db, db_company.id)
@@ -131,7 +158,9 @@ async def get_company_profile(
     if facts:
         price = price_row.close if price_row else None
         price_date = price_row.date if price_row else None
-        inputs = build_ratio_inputs_from_facts(facts, price=price, price_date=price_date)
+        inputs = build_ratio_inputs_from_facts(
+            facts, price=price, price_date=price_date
+        )
         ratios = compute_ratios(inputs)
     else:
         inputs, ratios = None, None
@@ -155,15 +184,33 @@ async def compare_companies(
     ticker_list = list(dict.fromkeys(raw))
 
     if not ticker_list:
-        raise ApiException(status_code=422, error="invalid_params", message="At least one ticker is required.", field="tickers")
+        raise ApiException(
+            status_code=422,
+            error="invalid_params",
+            message="At least one ticker is required.",
+            field="tickers",
+        )
     if len(ticker_list) > 10:
-        raise ApiException(status_code=422, error="invalid_params", message="At most 10 tickers are allowed.", field="tickers")
+        raise ApiException(
+            status_code=422,
+            error="invalid_params",
+            message="At most 10 tickers are allowed.",
+            field="tickers",
+        )
 
     ticker_results = []
     for ticker in ticker_list:
         company = repository.get_company_by_ticker(db, ticker=ticker)
         if not company or not company.id:
-            ticker_results.append({"ticker": ticker, "found": False, "facts": [], "ratios": None, "inputs": None})
+            ticker_results.append(
+                {
+                    "ticker": ticker,
+                    "found": False,
+                    "facts": [],
+                    "ratios": None,
+                    "inputs": None,
+                }
+            )
             continue
 
         facts = repository.get_latest_fy_facts(db, company.id)
@@ -179,7 +226,15 @@ async def compare_companies(
         else:
             inputs, ratios = None, None
 
-        ticker_results.append({"ticker": ticker, "found": True, "facts": facts, "ratios": ratios, "inputs": inputs})
+        ticker_results.append(
+            {
+                "ticker": ticker,
+                "found": True,
+                "facts": facts,
+                "ratios": ratios,
+                "inputs": inputs,
+            }
+        )
 
     metric_list = metrics.split(",") if metrics else None
     return schemas.transform_comparison(ticker_results, metric_list, format)
@@ -199,9 +254,18 @@ async def get_prices_for_ticker(
     logger.info(f"Request received to get prices for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
     if not db_company.id:
-        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Something went wrong when retrieving company id.",
+        )
 
     # Default bounds to full history if one side is missing
     if from_date is None:
@@ -214,7 +278,12 @@ async def get_prices_for_ticker(
         )
 
     if from_date and until_date and from_date > until_date:
-        raise ApiException(status_code=400, error="invalid_params", message="'from' must be on or before 'until'.", field="from")
+        raise ApiException(
+            status_code=400,
+            error="invalid_params",
+            message="'from' must be on or before 'until'.",
+            field="from",
+        )
 
     prices = repository.get_prices_for_company(
         db,
@@ -235,9 +304,18 @@ async def delete_company(ticker: str, db: Session = Depends(get_session)):
     logger.info(f"Request received to delete company {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
     if not db_company.id:
-        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Something went wrong when retrieving company id.",
+        )
 
     prices_deleted, companies_deleted = repository.delete_company_and_prices(
         db, company_id=db_company.id
@@ -245,7 +323,11 @@ async def delete_company(ticker: str, db: Session = Depends(get_session)):
 
     if companies_deleted == 0:
         logger.error(f"Failed to delete company {db_company.ticker} after found.")
-        raise ApiException(status_code=500, error="internal_error", message=f"Failed to delete company {db_company.ticker}.")
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message=f"Failed to delete company {db_company.ticker}.",
+        )
     logger.info(f"Company {db_company.ticker} deleted successfully")
 
     return {
@@ -265,16 +347,30 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     # find the company
     db_company = repository.get_company_by_ticker(db, ticker)
     if not db_company:
-        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
     if not db_company.id:
-        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Something went wrong when retrieving company id.",
+        )
 
     # find latest date in db
     latest_date = repository.get_latest_date_for_company(db, company_id=db_company.id)
 
     if not latest_date:
         logger.error("No price data found to sync.")
-        raise ApiException(status_code=400, error="invalid_params", message="No price data found to sync.", ticker=ticker)
+        raise ApiException(
+            status_code=400,
+            error="invalid_params",
+            message="No price data found to sync.",
+            ticker=ticker,
+        )
 
     # is already up-to-date?
     if latest_date >= (date.today() - timedelta(days=1)):
@@ -288,7 +384,12 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
         )
     except yfinance_client.YahooFinanceError as e:
         logger.error(f"Failed to fetch new data: {e}")
-        raise ApiException(status_code=500, error="internal_error", message="Failed to fetch new data.", detail=str(e))
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Failed to fetch new data.",
+            detail=str(e),
+        )
 
     if not new_prices:
         logger.info("Data is already up-to-date")
@@ -311,13 +412,24 @@ async def ingest_financials(ticker: str, db: Session = Depends(get_session)):
     logger.info(f"Request received to ingest financials for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
 
     try:
         result = await ingest_company_financials(db, ticker)
     except EdgarClientError as e:
         logger.error(f"EDGAR ingestion failed for {ticker}: {e}")
-        raise ApiException(status_code=400, error="ingestion_failed", message=f"EDGAR ingestion failed for {ticker}.", ticker=ticker, detail=str(e))
+        raise ApiException(
+            status_code=400,
+            error="ingestion_failed",
+            message=f"EDGAR ingestion failed for {ticker}.",
+            ticker=ticker,
+            detail=str(e),
+        )
 
     logger.info(f"Ingestion complete for {ticker}")
     return result
@@ -340,9 +452,18 @@ async def get_financials(
     logger.info(f"Request received to get financials for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
     if not db_company.id:
-        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Something went wrong when retrieving company id.",
+        )
 
     facts = repository.get_financial_facts(db, db_company.id, metric, period_type)
     logger.info(f"Financials for {ticker} retrieved successfully")
@@ -369,13 +490,27 @@ async def get_ratios(
     logger.info(f"Request received to get ratios for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
     if not db_company:
-        raise ApiException(status_code=404, error="not_found", message=f"Company {ticker} not found.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
     if not db_company.id:
-        raise ApiException(status_code=500, error="internal_error", message="Something went wrong when retrieving company id.")
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Something went wrong when retrieving company id.",
+        )
 
     facts = repository.get_latest_fy_facts(db, db_company.id)
     if not facts:
-        raise ApiException(status_code=404, error="not_found", message=f"No annual (FY) financial data found for {ticker}.", ticker=ticker)
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"No annual (FY) financial data found for {ticker}.",
+            ticker=ticker,
+        )
 
     price_row = repository.get_latest_price(db, db_company.id)
     price = price_row.close if price_row else None

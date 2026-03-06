@@ -61,7 +61,10 @@ def compute_ratios(inputs: RatioInputs) -> ComputedRatios:
     nm = _safe_div(inputs.net_income, inputs.revenue)
     roe = _safe_div(inputs.net_income, inputs.stockholders_equity)
 
-    if inputs.operating_income is not None and inputs.depreciation_amortization is not None:
+    if (
+        inputs.operating_income is not None
+        and inputs.depreciation_amortization is not None
+    ):
         ebitda = inputs.operating_income + inputs.depreciation_amortization
     else:
         ebitda = None

@@ -440,7 +440,9 @@ def test_get_financials_with_filters(client, engine):
         db.commit()
 
     # filter by metric only
-    response = client.get(f"/companies/{ticker}/financials?metric=revenue&format=verbose")
+    response = client.get(
+        f"/companies/{ticker}/financials?metric=revenue&format=verbose"
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
@@ -633,7 +635,9 @@ def test_get_financials_fields_with_standard_format(client, engine):
             db.add(f)
         db.commit()
 
-    response = client.get(f"/companies/{ticker}/financials?format=standard&fields=rev,ni")
+    response = client.get(
+        f"/companies/{ticker}/financials?format=standard&fields=rev,ni"
+    )
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
@@ -835,4 +839,3 @@ def test_meta_quarterly_includes_fq(client, engine):
     assert "fiscal_quarter" in meta
     assert meta["fiscal_quarter"] == "Q1"
     assert "fiscal_year" not in meta
-

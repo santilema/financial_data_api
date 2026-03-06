@@ -86,11 +86,15 @@ def test_get_profile_no_facts_no_price(client, engine):
 
 def test_get_profile_with_facts_no_price(client, engine):
     company_id = _create_company(client, "PFACTS")
-    _insert_facts(engine, company_id, {
-        "revenue": 100_000.0,
-        "net_income": 20_000.0,
-        "gross_profit": 50_000.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 100_000.0,
+            "net_income": 20_000.0,
+            "gross_profit": 50_000.0,
+        },
+    )
 
     response = client.get("/companies/PFACTS")
     assert response.status_code == 200
@@ -124,13 +128,17 @@ def test_get_profile_with_price_no_facts(client, engine):
 
 def test_get_profile_full_minimal(client, engine):
     company_id = _create_company(client, "PFULL")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "net_income": 30_000.0,
-        "gross_profit": 80_000.0,
-        "eps_diluted": 5.0,
-        "shares_outstanding": 1_000_000.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "net_income": 30_000.0,
+            "gross_profit": 80_000.0,
+            "eps_diluted": 5.0,
+            "shares_outstanding": 1_000_000.0,
+        },
+    )
     _insert_price(engine, company_id, close=150.0, price_date=date(2024, 3, 1))
 
     response = client.get("/companies/PFULL")
@@ -150,13 +158,17 @@ def test_get_profile_full_minimal(client, engine):
 
 def test_get_profile_full_standard(client, engine):
     company_id = _create_company(client, "PFSTD")
-    _insert_facts(engine, company_id, {
-        "revenue": 200_000.0,
-        "net_income": 30_000.0,
-        "gross_profit": 80_000.0,
-        "eps_diluted": 5.0,
-        "shares_outstanding": 1_000_000.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 200_000.0,
+            "net_income": 30_000.0,
+            "gross_profit": 80_000.0,
+            "eps_diluted": 5.0,
+            "shares_outstanding": 1_000_000.0,
+        },
+    )
     _insert_price(engine, company_id, close=150.0, price_date=date(2024, 3, 1))
 
     response = client.get("/companies/PFSTD?format=standard")
@@ -175,12 +187,16 @@ def test_get_profile_full_standard(client, engine):
 
 def test_get_profile_verbose_same_as_standard(client, engine):
     company_id = _create_company(client, "PFVBOSE")
-    _insert_facts(engine, company_id, {
-        "revenue": 100_000.0,
-        "net_income": 10_000.0,
-        "gross_profit": 40_000.0,
-        "eps_diluted": 3.0,
-    })
+    _insert_facts(
+        engine,
+        company_id,
+        {
+            "revenue": 100_000.0,
+            "net_income": 10_000.0,
+            "gross_profit": 40_000.0,
+            "eps_diluted": 3.0,
+        },
+    )
     _insert_price(engine, company_id, close=90.0, price_date=date(2024, 1, 1))
 
     std = client.get("/companies/PFVBOSE?format=standard").json()
