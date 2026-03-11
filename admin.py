@@ -8,7 +8,7 @@ import repository
 from schemas import ApiException
 from services.edgar_pipeline import ingest_company_financials
 
-router = APIRouter(prefix="/admin")
+router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = logging.getLogger(__name__)
 _jobs: dict[str, dict] = {}
 
@@ -22,10 +22,18 @@ def _require_admin_key(x_admin_key: str = Header(...)):
 @router.post("/ingest/batch")
 async def batch_ingest(
     background_tasks: BackgroundTasks,
-    tickers: str | None = Query(None),
+    tickers: str | None = Query(
+        None,
+        description="Comma-separated tickers to ingest. Omit to ingest all registered companies.",
+    ),
     db: Session = Depends(get_session),
     _: None = Depends(_require_admin_key),
 ):
+    """
+    Enqueue a background EDGAR ingestion job for one or more companies.
+    Requires `X-Admin-Key` header. Returns a `job_id` for status polling.
+    Use `GET /admin/ingest/status/{job_id}` to check progress.
+    """
     if tickers:
         ticker_list = list(
             dict.fromkeys(t.strip().upper() for t in tickers.split(",") if t.strip())
@@ -54,6 +62,10 @@ async def batch_ingest(
 
 @router.get("/ingest/status/{job_id}")
 async def batch_status(job_id: str, _: None = Depends(_require_admin_key)):
+    """
+    Poll the status of a batch ingestion job. Requires `X-Admin-Key` header.
+    Returns status (pending/running/completed), per-ticker results, and counts.
+    """
     job = _jobs.get(job_id)
     if not job:
         raise ApiException(404, "not_found", f"Job {job_id} not found.")

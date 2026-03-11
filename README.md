@@ -1,154 +1,262 @@
-# Financial Data API
+# FinDataAI
 
-A data pipeline built to fetch, store, and serve financial time-series data and fundamental financial statements. This project simulates the data ingestion layer of a quantitative analysis platform.
+A token-efficient financial data API designed for LLM agent consumption. Combines SEC EDGAR
+fundamental data with yfinance price history and exposes it through a clean REST interface
+with agent-optimized response formats.
 
-It uses **FastAPI** and **SQLModel** to manage data flow between external providers (`yfinance`, SEC EDGAR) and a **PostgreSQL** database.
+Interactive docs: `http://localhost:8000/docs`
+
+---
 
 ## Tech Stack
-* **Core:** Python 3.11, FastAPI, SQLModel (SQLAlchemy + Pydantic).
-* **Database:** PostgreSQL 18 (Production), SQLite (Testing).
-* **Infrastructure:** Docker, Docker Compose.
-* **Data Sources:** `yfinance` (Yahoo Finance), SEC EDGAR (fundamental financial data).
 
-## Features
-* **Price Ingestion:** Fetches historical daily prices for tickers (e.g., `AAPL`, `MSFT`) with "upsert" handling to prevent duplicates.
-* **Incremental Sync:** The `/sync` endpoint checks the latest stored date in the DB and fetches only the missing days.
-* **SEC EDGAR Integration:** Pulls 10-K/10-Q filings from the SEC EDGAR API and extracts standardized financial metrics (revenue, net income, EPS, etc.).
-* **XBRL Taxonomy Mapping:** Translates raw XBRL tags (e.g., `us-gaap:Revenues`) into human-readable metric names using a seeded taxonomy table.
-* **Async Concurrency:** Wraps blocking calls using `asyncio.to_thread` to keep the API responsive during external I/O.
-* **Data Types:** Uses `BigInt` for volume columns to handle large-cap market data without overflow.
-* **Automatic Documentation:** FastAPI generates OpenAPI docs served at `/docs`.
+| Layer | Technology |
+|---|---|
+| Language | Python 3.11 |
+| Framework | FastAPI + SQLModel (SQLAlchemy + Pydantic) |
+| Database | PostgreSQL (production), SQLite (testing) |
+| Data Sources | SEC EDGAR, yfinance |
+| Infrastructure | Docker, Docker Compose |
 
-## How to Run
+---
 
-### Option A: Docker (Recommended)
-Runs the API and Database services together.
+## Quick Start
 
-1.  **Build and Start:**
-    ```bash
-    docker compose up --build
-    ```
-2.  **Access:**
-    * API Docs: `http://localhost:8000/docs`
-    * Database: Port `5432`
+### Docker (Recommended)
 
-### Option B: Local Development
-Runs the Python app locally while connecting to a Dockerized database.
-
-1.  **Prerequisites:** Start the database service.
-    ```bash
-    docker compose up -d db
-    ```
-
-2.  **Set up Environment:**
-    ```bash
-    # Create virtual environment
-    python -m venv .venv
-    source .venv/bin/activate  # for unix systems
-
-    # Install dependencies
-    pip install -r requirements.txt
-    ```
-
-3.  **Configure Environment Variables:**
-    Create a `.env.local` file in the root directory:
-    ```ini
-    DATABASE_URL=postgresql://myuser:mypassword@localhost:5432/mydb
-    ```
-
-4.  **Run the Server:**
-    ```bash
-    uvicorn main:app --reload
-    ```
-
-## API Usage
-
-### Price Data (yfinance)
-
-**Add a company** and fetch its historical daily prices:
 ```bash
-curl -X POST http://localhost:8000/companies/AAPL
+docker compose up --build
+# API: http://localhost:8000
+# Docs: http://localhost:8000/docs
 ```
 
-**Get daily prices** for a company, optionally filtered by date range:
+### Local Development
+
 ```bash
-curl http://localhost:8000/prices/AAPL
-curl "http://localhost:8000/prices/AAPL?from=2024-01-01&until=2024-06-30"
+# Start the database
+docker compose up -d db
+
+# Set up environment
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Configure
+echo "DATABASE_URL=postgresql://myuser:mypassword@localhost:5432/mydb" > .env.local
+
+# Run
+uvicorn main:app --reload
 ```
 
-**Sync latest prices** to fill in any missing days since the last stored date:
-```bash
-curl -X POST http://localhost:8000/prices/AAPL/sync
+---
+
+## Endpoint Reference
+
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| POST | `/companies/{ticker}` | Register company + fetch price history | - |
+| GET | `/companies` | List all registered companies | - |
+| GET | `/companies/{ticker}` | Company profile with latest financials | - |
+| DELETE | `/companies/{ticker}` | Remove company and all its data | - |
+| GET | `/prices/{ticker}` | Daily OHLCV prices, optional date range | - |
+| POST | `/prices/{ticker}/sync` | Incremental price sync (new days only) | - |
+| DELETE | `/prices/{ticker}` | Alias for DELETE /companies/{ticker} | - |
+| POST | `/companies/{ticker}/financials` | Trigger SEC EDGAR ingestion | - |
+| GET | `/companies/{ticker}/financials` | Stored financial facts by period | - |
+| GET | `/companies/{ticker}/ratios` | Computed ratios for latest FY | - |
+| GET | `/companies/{ticker}/trend` | Multi-year trend data with computed ratios | - |
+| GET | `/search` | Search by ticker or name | - |
+| GET | `/compare` | Side-by-side metric matrix for multiple tickers | - |
+| GET | `/taxonomy` | XBRL tag to metric name mappings | - |
+| POST | `/admin/ingest/batch` | Batch EDGAR ingestion (background job) | X-Admin-Key |
+| GET | `/admin/ingest/status/{job_id}` | Poll batch ingestion job status | X-Admin-Key |
+
+---
+
+## Key Concepts
+
+### `?format=` parameter
+
+All financial endpoints accept `?format=minimal|standard|verbose`:
+
+- `minimal` (default) - short keys optimized for LLM context efficiency (`rev`, `ni`, `gm`)
+- `standard` - full descriptive names (`revenue`, `net_income`, `gross_margin`)
+- `verbose` - full names plus units and descriptions
+
+### `?fields=` and `?metrics=` parameters
+
+Comma-separated minimal-key lists to select only the columns you need:
+
+```
+GET /companies/AAPL/ratios?fields=gm,pe,de
+GET /companies/AAPL/trend?metrics=rev,ni,gm
+GET /compare?tickers=AAPL,MSFT&metrics=rev,ni,pe
 ```
 
-### Financial Statements (SEC EDGAR)
+### `_meta` freshness object
 
-**Ingest financial data** from SEC EDGAR filings for a company that already exists in the database. This resolves the company's CIK, fetches 10-K/10-Q filings, and extracts metrics like revenue, net income, and EPS:
-```bash
-curl -X POST http://localhost:8000/companies/AAPL/financials
-```
+Every period-grouped response includes a `_meta` object:
 
-Response:
 ```json
 {
-  "ticker": "AAPL",
-  "cik": "0000320193",
-  "inserted": 42,
-  "updated": 0
+  "_meta": {
+    "src": "edgar",
+    "age_days": 42,
+    "filed": "2024-01-15",
+    "fy": 2023
+  }
 }
 ```
 
-**Query stored financial facts** for a company, with optional filters:
-```bash
-# all facts
-curl http://localhost:8000/companies/AAPL/financials
+### Error schema
 
-# filter by metric
-curl "http://localhost:8000/companies/AAPL/financials?metric=revenue"
+All errors follow a consistent shape:
 
-# filter by metric and period type (FY for annual, Q1-Q4 for quarterly)
-curl "http://localhost:8000/companies/AAPL/financials?metric=revenue&period_type=FY"
+```json
+{
+  "error": "not_found",
+  "message": "Company ZZZZ not found.",
+  "ticker": "ZZZZ"
+}
 ```
 
-### Taxonomy
+### Search availability fields
 
-**List taxonomy mappings** to see which XBRL tags map to which metrics:
-```bash
-curl http://localhost:8000/taxonomy
+`GET /search` returns `has_financials` and `latest_fy` so agents can distinguish companies
+with ingested EDGAR data from shell entries:
 
-# filter by metric name
-curl "http://localhost:8000/taxonomy?metric=revenue"
+```json
+[
+  {"ticker": "AAPL", "name": "Apple Inc.", "sector": "Technology",
+   "has_financials": true, "latest_fy": 2023},
+  {"ticker": "NEWCO", "name": "New Corp", "sector": null,
+   "has_financials": false, "latest_fy": null}
+]
 ```
 
-### Other Endpoints
+---
 
-**List all companies:**
-```bash
-curl http://localhost:8000/companies
+## Example Responses
+
+### `GET /search?q=apple`
+
+```json
+[
+  {
+    "ticker": "AAPL",
+    "name": "Apple Inc.",
+    "sector": "Technology",
+    "has_financials": true,
+    "latest_fy": 2023
+  }
+]
 ```
 
-**Delete a company** and all its associated data:
-```bash
-curl -X DELETE http://localhost:8000/companies/AAPL
+### `GET /companies/AAPL/ratios?format=minimal`
+
+```json
+{
+  "ticker": "AAPL",
+  "gm": 0.441,
+  "om": 0.297,
+  "nm": 0.253,
+  "de": 1.79,
+  "roe": 1.56,
+  "pe": 28.4,
+  "pb": 42.1,
+  "_meta": {"src": "edgar+yfinance", "age_days": 60, "filed": "2023-11-03", "fy": 2023, "price_date": "2024-03-01"}
+}
 ```
 
-## Quality Assurance
+### `GET /companies/AAPL/trend?metrics=rev,ni,gm&periods=3`
 
-### Testing Strategy
-The test suite uses **Integration Tests** to validate database interactions and API behavior.
-* **Engine:** Uses **SQLite in-memory** with a `StaticPool` for speed.
-* **Isolation:** Overrides the `get_session` dependency to ensure tests run against the in-memory database, not the production instance.
-* **Mocking:** External services (yfinance, SEC EDGAR) are mocked at the service boundary to keep tests fast and deterministic.
-
-Run tests with:
-```bash
-pytest -v
+```json
+{
+  "ticker": "AAPL",
+  "metrics": ["rev", "ni", "gm"],
+  "periods": [
+    {"fy": 2021, "rev": 365817000000, "ni": 94680000000, "gm": 0.418},
+    {"fy": 2022, "rev": 394328000000, "ni": 99803000000, "gm": 0.433},
+    {"fy": 2023, "rev": 383285000000, "ni": 96995000000, "gm": 0.441}
+  ],
+  "_meta": {"coverage": {"from": 2021, "to": 2023}, "periods_available": 3}
+}
 ```
 
-### Code Formatting
-The codebase adheres to strict formatting standards using **Black**.
-* **Pre-commit:** Git hooks are configured to enforce formatting before commits.
+### `GET /compare?tickers=AAPL,MSFT&metrics=rev,ni,gm`
+
+```json
+{
+  "metrics": ["rev", "ni", "gm"],
+  "data": {
+    "AAPL": {"rev": 383285000000, "ni": 96995000000, "gm": 0.441},
+    "MSFT": {"rev": 211915000000, "ni": 72361000000, "gm": 0.699}
+  },
+  "_meta": {"fy_used": {"AAPL": 2023, "MSFT": 2023}}
+}
+```
+
+---
+
+## Admin Endpoints
+
+Batch ingestion is protected by the `X-Admin-Key` header (default: `dev` in development).
+
+### Batch ingest workflow
+
+```bash
+# Start a background ingestion job for all registered companies
+curl -X POST "http://localhost:8000/admin/ingest/batch" \
+  -H "X-Admin-Key: dev"
+
+# Or for specific tickers
+curl -X POST "http://localhost:8000/admin/ingest/batch?tickers=AAPL,MSFT,GOOG" \
+  -H "X-Admin-Key: dev"
+
+# Response
+# {"job_id": "abc-123", "total": 3, "status": "pending"}
+
+# Poll until completed
+curl "http://localhost:8000/admin/ingest/status/abc-123" \
+  -H "X-Admin-Key: dev"
+```
+
+Set `ADMIN_KEY` environment variable in production to override the default.
+
+---
+
+## Testing
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/ -v
+```
+
+The test suite uses:
+- **SQLite in-memory** database with `StaticPool` for speed and isolation
+- **Dependency injection override** to route tests through the in-memory DB
+- **`unittest.mock.patch`** for external services (yfinance, SEC EDGAR)
+- **Direct `db.add()`** to seed test data without going through API endpoints
+
+---
 
 ## Architecture
-* **Modular Monolith:** Logic is separated into `models` (schema), `repository` (DB access), and `services` (external APIs and pipelines), decoupling the business rules from the framework.
-* **Services layer:** `yfinance_client` handles price data, `edgar_client` handles SEC HTTP calls, `taxonomy` maps XBRL tags to metrics, and `edgar_pipeline` orchestrates the full ingestion flow.
+
+```
+main.py            FastAPI endpoints - request validation, routing, response shaping
+admin.py           Admin router - batch ingestion with background tasks
+repository.py      Database access layer - all SQL queries in one place
+schemas.py         Response transformers - format/field filtering, ratio/trend computation
+models.py          SQLModel table definitions
+services/
+  ratios.py        RatioInputs dataclass + compute_ratios function
+  edgar_pipeline.py  Orchestrates EDGAR ingestion: CIK lookup, fact extraction, upsert
+  edgar_client.py  Low-level SEC EDGAR HTTP client
+  yfinance_client.py  Yahoo Finance price fetcher
+  taxonomy.py      XBRL tag seeding logic
+database.py        Engine and session factory
+```
+
+Data flows: `endpoint -> repository -> DB` for reads, `endpoint -> service -> repository -> DB`
+for ingestion. Schema transforms happen in `schemas.py` after data is fetched, keeping the
+repository layer format-agnostic.

@@ -2,6 +2,7 @@ from typing import Literal, Optional
 from datetime import date, timedelta
 from fastapi import HTTPException
 from pydantic import BaseModel
+from services.ratios import build_ratio_inputs_from_facts, compute_ratios
 
 MINIMAL_TO_STANDARD: dict[str, str] = {
     "rev": "revenue",
@@ -458,6 +459,85 @@ def transform_comparison(
         meta["not_found"] = not_found
 
     return {"metrics": metrics, "data": data, "_meta": meta}
+
+
+def transform_trend(
+    facts: list,
+    ticker: str,
+    format: Literal["minimal", "standard", "verbose"],
+    metrics_filter: list[str] | None,
+    periods: int,
+) -> dict:
+    if not facts:
+        return {"ticker": ticker, "metrics": [], "periods": [], "_meta": None}
+
+    # Group FY facts by year
+    by_year: dict[int, list] = {}
+    for fact in facts:
+        if fact.end_date is None:
+            continue
+        yr = fact.end_date.year
+        by_year.setdefault(yr, []).append(fact)
+
+    if not by_year:
+        return {"ticker": ticker, "metrics": [], "periods": [], "_meta": None}
+
+    # Resolve metrics_filter to standard names for lookup
+    requested_std: set[str] | None = None
+    if metrics_filter:
+        requested_std = {MINIMAL_TO_STANDARD.get(m, m) for m in metrics_filter}
+
+    sorted_years = sorted(by_year.keys())
+    sorted_years = sorted_years[-periods:]
+
+    seen_keys: list[str] = []
+    seen_keys_set: set[str] = set()
+    period_rows = []
+
+    for yr in sorted_years:
+        yr_facts = by_year[yr]
+        inputs = build_ratio_inputs_from_facts(yr_facts, price=None, price_date=None)
+        ratios = compute_ratios(inputs)
+
+        row: dict = {"fy": yr}
+
+        # Raw metrics from facts
+        for fact in yr_facts:
+            std_key = fact.metric
+            if requested_std is not None and std_key not in requested_std:
+                continue
+            out_key = STANDARD_TO_MINIMAL.get(std_key, std_key) if format == "minimal" else std_key
+            row[out_key] = fact.value
+            if out_key not in seen_keys_set:
+                seen_keys.append(out_key)
+                seen_keys_set.add(out_key)
+
+        # Computed ratios
+        for std_key in RATIO_STANDARD_KEYS:
+            if requested_std is not None and std_key not in requested_std:
+                continue
+            val = getattr(ratios, std_key, None)
+            if val is None:
+                continue
+            out_key = STANDARD_TO_MINIMAL.get(std_key, std_key) if format == "minimal" else std_key
+            row[out_key] = val
+            if out_key not in seen_keys_set:
+                seen_keys.append(out_key)
+                seen_keys_set.add(out_key)
+
+        period_rows.append(row)
+
+    meta = {
+        "coverage": {"from": sorted_years[0], "to": sorted_years[-1]},
+        "periods_available": len(sorted_years),
+    }
+
+    return {
+        "ticker": ticker,
+        "metrics": seen_keys,
+        "periods": period_rows,
+        "_meta": meta,
+    }
 
 
 def _add_to_row(row: dict, fact, format: str) -> None:

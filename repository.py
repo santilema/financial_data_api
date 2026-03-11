@@ -246,3 +246,21 @@ def get_latest_price(db: Session, company_id: int) -> DailyPrice | None:
         .where(DailyPrice.company_id == company_id)
         .order_by(DailyPrice.date.desc())
     ).first()
+
+
+def get_companies_financials_availability(
+    db: Session, company_ids: list[int]
+) -> dict[int, int]:
+    """Returns {company_id: latest_fy_year} for companies that have FY facts."""
+    if not company_ids:
+        return {}
+    statement = (
+        select(FinancialFact.company_id, func.max(FinancialFact.end_date))
+        .where(
+            FinancialFact.company_id.in_(company_ids),
+            FinancialFact.period_type == "FY",
+        )
+        .group_by(FinancialFact.company_id)
+    )
+    rows = db.exec(statement).all()
+    return {cid: end_date.year for cid, end_date in rows if end_date}

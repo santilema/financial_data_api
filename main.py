@@ -40,7 +40,17 @@ async def lifespan(_app: FastAPI):
     logger.info("Shutting down")
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    title="FinDataAI",
+    description=(
+        "Token-efficient financial data API designed for LLM agent consumption. "
+        "Combines SEC EDGAR fundamental data with yfinance price history. "
+        "All financial endpoints support `?format=minimal|standard|verbose` "
+        "and `?fields=` for field selection."
+    ),
+    version="0.5.0",
+)
 app.include_router(admin_router)
 
 
@@ -70,10 +80,11 @@ def read_root():
     return {"message": "Hello world :D"}
 
 
-@app.post("/companies/{ticker}", response_model=Company)
+@app.post("/companies/{ticker}", response_model=Company, tags=["Companies"])
 async def add_new_company(ticker: str, db: Session = Depends(get_session)):
     """
-    Fetches ~20 years of data from yfinance and stores it in the database.
+    Register a new company and fetch its full price history from yfinance (~20 years).
+    Returns the created company record. Raises 400 if the ticker already exists.
     """
     logger.info(f"Request received to add company {ticker}")
     # check if already exists
@@ -119,24 +130,29 @@ async def add_new_company(ticker: str, db: Session = Depends(get_session)):
     return db_company
 
 
-@app.get("/companies", response_model=List[Company])
+@app.get("/companies", response_model=List[Company], tags=["Companies"])
 async def get_all_companies(db: Session = Depends(get_session)):
     """
-    Gets a list with all available companies.
+    Returns all companies registered in the database.
     """
     logger.info("Request received to get all companies")
     db_companies = repository.get_all_companies(db)
     return db_companies
 
 
-@app.get("/companies/{ticker}")
+@app.get("/companies/{ticker}", tags=["Companies"])
 async def get_company_profile(
     ticker: str,
-    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
+    format: str = Query(
+        "minimal",
+        pattern="^(minimal|standard|verbose)$",
+        description="Response verbosity. minimal=short keys (agent-optimized), standard=full names, verbose=with descriptions.",
+    ),
     db: Session = Depends(get_session),
 ):
     """
-    Returns a compact company profile: metadata, latest financials, and key ratios.
+    Returns a compact company profile: metadata, latest FY financials, and key ratios.
+    Includes price data if available. Returns 404 if the ticker is not registered.
     """
     logger.info(f"Request received to get profile for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
@@ -172,15 +188,27 @@ async def get_company_profile(
     )
 
 
-@app.get("/compare")
+@app.get("/compare", tags=["Compare"])
 async def compare_companies(
-    tickers: str = Query(...),
-    metrics: str | None = Query(None),
-    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
+    tickers: str = Query(
+        ...,
+        description="Comma-separated ticker list, max 10.",
+    ),
+    metrics: str | None = Query(
+        None,
+        description="Comma-separated minimal-key fields to include, e.g. `rev,ni,gm`. Omit for all.",
+    ),
+    format: str = Query(
+        "minimal",
+        pattern="^(minimal|standard|verbose)$",
+        description="Response verbosity. minimal=short keys (agent-optimized), standard=full names, verbose=with descriptions.",
+    ),
     db: Session = Depends(get_session),
 ):
     """
-    Returns a matrix comparison of key metrics across multiple companies.
+    Returns a side-by-side metric matrix for up to 10 tickers.
+    Tickers not found in the database appear with all-null values and are listed in `_meta.not_found`.
+    Use `?metrics=rev,ni,pe` to limit the columns returned.
     """
     raw = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     ticker_list = list(dict.fromkeys(raw))
@@ -242,18 +270,40 @@ async def compare_companies(
     return schemas.transform_comparison(ticker_results, metric_list, format)
 
 
-@app.get("/search")
+@app.get("/search", tags=["Search"])
 async def search_companies(
-    q: str | None = Query(None),
-    sector: str | None = Query(None),
+    q: str | None = Query(
+        None,
+        description="Search by ticker or company name (case-insensitive partial match).",
+    ),
+    sector: str | None = Query(
+        None,
+        description="Filter by sector (case-insensitive exact match).",
+    ),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_session),
 ):
-    results = repository.search_companies(db, q=q, sector=sector, limit=limit)
-    return [{"ticker": c.ticker, "name": c.name, "sector": c.sector} for c in results]
+    """
+    Search companies by ticker or name. Returns ticker, name, sector, plus availability
+    indicators: `has_financials` (bool) and `latest_fy` (int year or null) show whether
+    EDGAR data has been ingested. Exact ticker matches rank first.
+    """
+    companies = repository.search_companies(db, q=q, sector=sector, limit=limit)
+    ids = [c.id for c in companies if c.id]
+    availability = repository.get_companies_financials_availability(db, ids)
+    return [
+        {
+            "ticker": c.ticker,
+            "name": c.name,
+            "sector": c.sector,
+            "has_financials": c.id in availability,
+            "latest_fy": availability.get(c.id),
+        }
+        for c in companies
+    ]
 
 
-@app.get("/prices/{ticker}", response_model=List[DailyPrice])
+@app.get("/prices/{ticker}", response_model=List[DailyPrice], tags=["Prices"])
 async def get_prices_for_ticker(
     ticker: str,
     from_date: date | None = Query(None, alias="from"),
@@ -261,8 +311,8 @@ async def get_prices_for_ticker(
     db: Session = Depends(get_session),
 ):
     """
-    Gets stored daily prices for a given company, optionally
-    filtered by date range.
+    Returns stored daily OHLCV prices for a company, optionally filtered by date range.
+    Defaults to the full available history when no date bounds are provided.
     """
     logger.info(f"Request received to get prices for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
@@ -308,11 +358,11 @@ async def get_prices_for_ticker(
     return prices
 
 
-@app.delete("/companies/{ticker}", response_model=dict)
-@app.delete("/prices/{ticker}", response_model=dict)
+@app.delete("/companies/{ticker}", response_model=dict, tags=["Companies"])
+@app.delete("/prices/{ticker}", response_model=dict, tags=["Prices"])
 async def delete_company(ticker: str, db: Session = Depends(get_session)):
     """
-    Remove ticker and all its price data from the database.
+    Remove a company and all its associated price and financial data from the database.
     """
     logger.info(f"Request received to delete company {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
@@ -350,11 +400,11 @@ async def delete_company(ticker: str, db: Session = Depends(get_session)):
     }
 
 
-@app.post("/prices/{ticker}/sync", response_model=dict)
+@app.post("/prices/{ticker}/sync", response_model=dict, tags=["Prices"])
 async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     """
-    This endpoint finds the latest data in the database
-    and fetches everything new since then.
+    Incrementally sync price data. Finds the latest stored date and fetches
+    only new trading days since then. Returns immediately if already up-to-date.
     """
     logger.info(f"Request received to sync latest prices for {ticker}")
     # find the company
@@ -417,10 +467,11 @@ async def sync_latest_prices(ticker: str, db: Session = Depends(get_session)):
     return {"message": f"Sync complete. {len(new_prices)} new records added."}
 
 
-@app.post("/companies/{ticker}/financials")
+@app.post("/companies/{ticker}/financials", tags=["Financials"])
 async def ingest_financials(ticker: str, db: Session = Depends(get_session)):
     """
-    Triggers SEC EDGAR ingestion for a company.
+    Triggers SEC EDGAR ingestion for the company. Resolves the CIK, fetches 10-K/10-Q
+    filings, and upserts financial facts into the database. Returns insert/update counts.
     """
     logger.info(f"Request received to ingest financials for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
@@ -448,19 +499,26 @@ async def ingest_financials(ticker: str, db: Session = Depends(get_session)):
     return result
 
 
-@app.get("/companies/{ticker}/financials")
+@app.get("/companies/{ticker}/financials", tags=["Financials"])
 async def get_financials(
     ticker: str,
     metric: str | None = Query(None),
     period_type: str | None = Query(None),
-    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
-    fields: str | None = Query(None),
+    format: str = Query(
+        "minimal",
+        pattern="^(minimal|standard|verbose)$",
+        description="Response verbosity. minimal=short keys (agent-optimized), standard=full names, verbose=with descriptions.",
+    ),
+    fields: str | None = Query(
+        None,
+        description="Comma-separated minimal-key fields to include, e.g. `rev,ni,eps`. Omit for all.",
+    ),
     db: Session = Depends(get_session),
 ):
     """
-    Gets stored financial facts for a given company,
-    optionally filtered by metric and period type.
-    Supports format=minimal|standard|verbose and fields=rev,ni,eps.
+    Returns stored financial facts grouped by period (FY/Q1-Q4). Each period group
+    includes a `_meta` freshness object with filing date and data age. Use `?fields=rev,ni`
+    to limit fields and `?period_type=FY` for annual-only data.
     """
     logger.info(f"Request received to get financials for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
@@ -490,15 +548,24 @@ async def get_financials(
     )
 
 
-@app.get("/companies/{ticker}/ratios")
+@app.get("/companies/{ticker}/ratios", tags=["Financials"])
 async def get_ratios(
     ticker: str,
-    format: str = Query("minimal", pattern="^(minimal|standard|verbose)$"),
-    fields: str | None = Query(None),
+    format: str = Query(
+        "minimal",
+        pattern="^(minimal|standard|verbose)$",
+        description="Response verbosity. minimal=short keys (agent-optimized), standard=full names, verbose=with descriptions.",
+    ),
+    fields: str | None = Query(
+        None,
+        description="Comma-separated minimal-key fields to include, e.g. `gm,pe,de`. Omit for all.",
+    ),
     db: Session = Depends(get_session),
 ):
     """
-    Returns computed financial ratios for the most recent FY data.
+    Returns computed financial ratios for the most recent fiscal year.
+    Includes margins, EBITDA, D/E, ROE, and price-based ratios (PE, PB) when price
+    data is available. Returns 404 if no FY financial data has been ingested.
     """
     logger.info(f"Request received to get ratios for {ticker}")
     db_company = repository.get_company_by_ticker(db, ticker=ticker)
@@ -536,13 +603,60 @@ async def get_ratios(
     return schemas.transform_ratios(ratios, inputs, ticker, format=format, fields=field_list)  # type: ignore[arg-type]
 
 
-@app.get("/taxonomy", response_model=List[TaxonomyMapping])
+@app.get("/companies/{ticker}/trend", tags=["Financials"])
+async def get_trend(
+    ticker: str,
+    metrics: str | None = Query(
+        None,
+        description="Comma-separated minimal-key fields to include, e.g. `rev,ni,gm`. Omit for all.",
+    ),
+    periods: int = Query(
+        5,
+        ge=1,
+        le=20,
+        description="Number of fiscal years to return (most recent N, chronological order).",
+    ),
+    format: str = Query(
+        "minimal",
+        pattern="^(minimal|standard|verbose)$",
+        description="Response verbosity. minimal=short keys (agent-optimized), standard=full names, verbose=with descriptions.",
+    ),
+    db: Session = Depends(get_session),
+):
+    """
+    Returns multi-year trend data for a company. Each period row contains raw financial
+    metrics and computed ratios (margins, EBITDA, D/E, ROE). PE and PB are always null
+    here - historical price data per fiscal year is not available. Periods are sorted
+    oldest to newest. Returns 200 with empty periods if the company exists but has no
+    FY data yet. Returns 404 if the company is not registered.
+    """
+    db_company = repository.get_company_by_ticker(db, ticker=ticker)
+    if not db_company:
+        raise ApiException(
+            status_code=404,
+            error="not_found",
+            message=f"Company {ticker} not found.",
+            ticker=ticker,
+        )
+    if not db_company.id:
+        raise ApiException(
+            status_code=500,
+            error="internal_error",
+            message="Something went wrong when retrieving company id.",
+        )
+
+    facts = repository.get_financial_facts(db, db_company.id, period_type="FY")
+    metric_list = metrics.split(",") if metrics else None
+    return schemas.transform_trend(facts, ticker, format, metric_list, periods)  # type: ignore[arg-type]
+
+
+@app.get("/taxonomy", response_model=List[TaxonomyMapping], tags=["Taxonomy"])
 async def get_taxonomy(
     metric: str | None = Query(None),
     db: Session = Depends(get_session),
 ):
     """
-    Lists taxonomy mappings, optionally filtered by metric.
+    Lists XBRL taxonomy mappings (tag to metric name). Use `?metric=revenue` to filter.
     """
     logger.info("Request received to get taxonomy mappings")
     mappings = repository.get_taxonomy_mappings(db, metric)
