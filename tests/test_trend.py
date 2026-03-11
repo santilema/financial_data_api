@@ -79,9 +79,15 @@ def test_trend_no_financials(client, engine):
 
 def test_trend_basic_minimal(client, engine):
     cid = _create_company(client, "TMIN")
-    _insert_year(engine, cid, {"revenue": 100_000.0, "net_income": 10_000.0}, date(2021, 12, 31))
-    _insert_year(engine, cid, {"revenue": 120_000.0, "net_income": 12_000.0}, date(2022, 12, 31))
-    _insert_year(engine, cid, {"revenue": 150_000.0, "net_income": 15_000.0}, date(2023, 12, 31))
+    _insert_year(
+        engine, cid, {"revenue": 100_000.0, "net_income": 10_000.0}, date(2021, 12, 31)
+    )
+    _insert_year(
+        engine, cid, {"revenue": 120_000.0, "net_income": 12_000.0}, date(2022, 12, 31)
+    )
+    _insert_year(
+        engine, cid, {"revenue": 150_000.0, "net_income": 15_000.0}, date(2023, 12, 31)
+    )
 
     response = client.get("/companies/TMIN/trend")
     assert response.status_code == 200
@@ -98,7 +104,9 @@ def test_trend_basic_minimal(client, engine):
 
 def test_trend_basic_standard(client, engine):
     cid = _create_company(client, "TSTD")
-    _insert_year(engine, cid, {"revenue": 100_000.0, "net_income": 10_000.0}, date(2022, 12, 31))
+    _insert_year(
+        engine, cid, {"revenue": 100_000.0, "net_income": 10_000.0}, date(2022, 12, 31)
+    )
 
     response = client.get("/companies/TSTD/trend?format=standard")
     assert response.status_code == 200

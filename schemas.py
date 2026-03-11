@@ -506,7 +506,11 @@ def transform_trend(
             std_key = fact.metric
             if requested_std is not None and std_key not in requested_std:
                 continue
-            out_key = STANDARD_TO_MINIMAL.get(std_key, std_key) if format == "minimal" else std_key
+            out_key = (
+                STANDARD_TO_MINIMAL.get(std_key, std_key)
+                if format == "minimal"
+                else std_key
+            )
             row[out_key] = fact.value
             if out_key not in seen_keys_set:
                 seen_keys.append(out_key)
@@ -519,7 +523,11 @@ def transform_trend(
             val = getattr(ratios, std_key, None)
             if val is None:
                 continue
-            out_key = STANDARD_TO_MINIMAL.get(std_key, std_key) if format == "minimal" else std_key
+            out_key = (
+                STANDARD_TO_MINIMAL.get(std_key, std_key)
+                if format == "minimal"
+                else std_key
+            )
             row[out_key] = val
             if out_key not in seen_keys_set:
                 seen_keys.append(out_key)
