@@ -1,18 +1,19 @@
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from datetime import date, timedelta
-from models import Instrument, DailyPrice
+from models import Company, DailyPrice, FinancialFact
 from services.yfinance_client import YahooFinanceError
+from services.edgar_client import EdgarClientError
 
-# --- Create instruments ---
+# --- Create companies ---
 
 
-def test_add_instrument_success(client):
+def test_add_company_success(client):
     ticker = "AAPL"
-    mock_instrument = Instrument(ticker=ticker, name="Apple Inc.")
+    mock_company = Company(ticker=ticker, name="Apple Inc.")
 
     mock_prices = [
         DailyPrice(
-            instrument_id=None,  # db assigns this
+            company_id=None,  # db assigns this
             date=date(2025, 1, 1),
             open=100.0,
             high=110.0,
@@ -24,46 +25,49 @@ def test_add_instrument_success(client):
 
     # Patching the sync function directly
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
-        mock_fetch.return_value = (mock_instrument, mock_prices)
-        response = client.post(f"/instruments/{ticker}")
+        mock_fetch.return_value = (mock_company, mock_prices)
+        response = client.post(f"/companies/{ticker}")
 
     assert response.status_code == 200
     data = response.json()
     assert data["ticker"] == ticker
     assert data["id"] is not None
-    # ensure instrument is listed
-    instruments_response = client.get("/instruments")
-    assert len(instruments_response.json()) == 1
-    assert instruments_response.json()[0]["ticker"] == ticker
+    # ensure company is listed
+    companies_response = client.get("/companies")
+    assert len(companies_response.json()) == 1
+    assert companies_response.json()[0]["ticker"] == ticker
 
     # ensure price actually persisted
     price_response = client.get(f"/prices/{ticker}")
     assert len(price_response.json()) == 1
 
 
-def test_add_duplicate_instrument(client):
+def test_add_duplicate_company(client):
     ticker = "MSFT"
 
     # first attempt
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
-        mock_fetch.return_value = (Instrument(ticker=ticker, name="Micro"), [])
-        client.post(f"/instruments/{ticker}")
+        mock_fetch.return_value = (Company(ticker=ticker, name="Micro"), [])
+        client.post(f"/companies/{ticker}")
 
     # second attempt should fail
-    response = client.post(f"/instruments/{ticker}")
+    response = client.post(f"/companies/{ticker}")
 
     assert response.status_code == 400
-    assert "already exists" in response.json()["detail"]
+    assert response.json()["error"] == "already_exists"
+    assert response.json()["ticker"] == ticker
 
 
-def test_add_instrument_yfinance_failure(client):
+def test_add_company_yfinance_failure(client):
     ticker = "INVALID"
 
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.side_effect = YahooFinanceError("Ticker not found")
-        response = client.post(f"/instruments/{ticker}")
+        response = client.post(f"/companies/{ticker}")
 
     assert response.status_code == 400
+    assert response.json()["error"] == "ingestion_failed"
+    assert response.json()["ticker"] == ticker
     assert "Ticker not found" in response.json()["detail"]
 
 
@@ -82,10 +86,10 @@ def test_get_prices_default_full_history(client):
 
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (
-            Instrument(ticker=ticker, name="Amazon"),
+            Company(ticker=ticker, name="Amazon"),
             [
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=first,
                     open=1,
                     high=1,
@@ -94,7 +98,7 @@ def test_get_prices_default_full_history(client):
                     volume=100,
                 ),
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=second,
                     open=2,
                     high=2,
@@ -104,7 +108,7 @@ def test_get_prices_default_full_history(client):
                 ),
             ],
         )
-        client.post(f"/instruments/{ticker}")
+        client.post(f"/companies/{ticker}")
 
     response = client.get(f"/prices/{ticker}")
     assert response.status_code == 200
@@ -121,10 +125,10 @@ def test_get_prices_filtered_range(client):
 
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (
-            Instrument(ticker=ticker, name="Meta"),
+            Company(ticker=ticker, name="Meta"),
             [
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=d,
                     open=i,
                     high=i,
@@ -135,7 +139,7 @@ def test_get_prices_filtered_range(client):
                 for i, d in enumerate(dates, start=1)
             ],
         )
-        client.post(f"/instruments/{ticker}")
+        client.post(f"/companies/{ticker}")
 
     response = client.get(f"/prices/{ticker}?from=2023-01-02&until=2023-01-03")
     assert response.status_code == 200
@@ -150,10 +154,10 @@ def test_get_prices_invalid_range(client):
     ticker = "ORCL"
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (
-            Instrument(ticker=ticker, name="Oracle"),
+            Company(ticker=ticker, name="Oracle"),
             [
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=date(2022, 1, 1),
                     open=1,
                     high=1,
@@ -163,11 +167,12 @@ def test_get_prices_invalid_range(client):
                 )
             ],
         )
-        client.post(f"/instruments/{ticker}")
+        client.post(f"/companies/{ticker}")
 
     response = client.get(f"/prices/{ticker}?from=2022-02-01&until=2022-01-01")
     assert response.status_code == 400
-    assert "must be on or before" in response.json()["detail"]
+    assert response.json()["error"] == "invalid_params"
+    assert response.json()["field"] == "from"
 
 
 # --- Sync Logic ---
@@ -180,10 +185,10 @@ def test_sync_prices_success(client):
     # 1. fill db with old data
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch_init:
         mock_fetch_init.return_value = (
-            Instrument(ticker=ticker, name="Google"),
+            Company(ticker=ticker, name="Google"),
             [
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=old_date,
                     open=1,
                     high=1,
@@ -193,11 +198,11 @@ def test_sync_prices_success(client):
                 )
             ],
         )
-        client.post(f"/instruments/{ticker}")
+        client.post(f"/companies/{ticker}")
 
     # 2. Sync new data (simulate 1 new day)
     new_price = DailyPrice(
-        instrument_id=None,
+        company_id=None,
         date=date.today(),
         open=2,
         high=2,
@@ -225,10 +230,10 @@ def test_sync_prices_already_up_to_date(client):
     # fill with fresh data
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (
-            Instrument(ticker=ticker, name="Nvidia"),
+            Company(ticker=ticker, name="Nvidia"),
             [
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=yesterday,
                     open=1,
                     high=1,
@@ -238,7 +243,7 @@ def test_sync_prices_already_up_to_date(client):
                 )
             ],
         )
-        client.post(f"/instruments/{ticker}")
+        client.post(f"/companies/{ticker}")
 
     # sync should hit the guard clause and avoid external calls
     with patch("services.yfinance_client._fetch_data_since_sync") as mock_sync:
@@ -254,19 +259,19 @@ def test_sync_prices_ticker_not_found(client):
     assert response.status_code == 404
 
 
-# --- Delete Instruments ---
+# --- Delete Companies ---
 
 
-def test_delete_instrument_removes_prices(client):
+def test_delete_company_removes_prices(client):
     ticker = "TSLA"
     price_date = date(2024, 1, 1)
 
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (
-            Instrument(ticker=ticker, name="Tesla"),
+            Company(ticker=ticker, name="Tesla"),
             [
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=price_date,
                     open=1,
                     high=1,
@@ -276,28 +281,28 @@ def test_delete_instrument_removes_prices(client):
                 )
             ],
         )
-        client.post(f"/instruments/{ticker}")
+        client.post(f"/companies/{ticker}")
 
-    response = client.delete(f"/instruments/{ticker}")
+    response = client.delete(f"/companies/{ticker}")
     assert response.status_code == 200
     data = response.json()
     assert data["prices_deleted"] == 1
-    assert data["instrument_deleted"] == 1
+    assert data["company_deleted"] == 1
     assert ticker in data["message"]
 
-    # instrument and prices should be gone
+    # company and prices should be gone
     price_response = client.get(f"/prices/{ticker}")
     assert price_response.status_code == 404
 
 
-def test_delete_instrument_not_found_does_not_touch_other_data(client):
+def test_delete_company_not_found_does_not_touch_other_data(client):
     existing_ticker = "IBM"
     with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
         mock_fetch.return_value = (
-            Instrument(ticker=existing_ticker, name="IBM"),
+            Company(ticker=existing_ticker, name="IBM"),
             [
                 DailyPrice(
-                    instrument_id=None,
+                    company_id=None,
                     date=date(2023, 1, 1),
                     open=1,
                     high=1,
@@ -307,12 +312,530 @@ def test_delete_instrument_not_found_does_not_touch_other_data(client):
                 )
             ],
         )
-        client.post(f"/instruments/{existing_ticker}")
+        client.post(f"/companies/{existing_ticker}")
 
-    response = client.delete("/instruments/UNKNOWN")
+    response = client.delete("/companies/UNKNOWN")
     assert response.status_code == 404
 
     # existing ticker data should remain untouched
     existing_prices = client.get(f"/prices/{existing_ticker}")
     assert existing_prices.status_code == 200
     assert len(existing_prices.json()) == 1
+
+
+# --- Financials (EDGAR) ---
+
+
+def _create_company(client, ticker, name):
+    """Helper to create a company via the API."""
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (Company(ticker=ticker, name=name), [])
+        client.post(f"/companies/{ticker}")
+
+
+def test_ingest_financials_success(client):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple Inc.")
+
+    summary = {"ticker": ticker, "cik": "0000320193", "inserted": 5, "updated": 0}
+    with patch("main.ingest_company_financials", new_callable=AsyncMock) as mock_ingest:
+        mock_ingest.return_value = summary
+        response = client.post(f"/companies/{ticker}/financials")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ticker"] == ticker
+    assert data["cik"] == "0000320193"
+    assert data["inserted"] == 5
+
+
+def test_ingest_financials_company_not_found(client):
+    response = client.post("/companies/UNKNOWN/financials")
+    assert response.status_code == 404
+
+
+def test_ingest_financials_edgar_error(client):
+    ticker = "MSFT"
+    _create_company(client, ticker, "Microsoft")
+
+    with patch("main.ingest_company_financials", new_callable=AsyncMock) as mock_ingest:
+        mock_ingest.side_effect = EdgarClientError("EDGAR API unavailable")
+        response = client.post(f"/companies/{ticker}/financials")
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "ingestion_failed"
+    assert response.json()["ticker"] == ticker
+    assert "EDGAR API unavailable" in response.json()["detail"]
+
+
+def test_get_financials_success(client, engine):
+    ticker = "AMZN"
+    _create_company(client, ticker, "Amazon")
+
+    # insert facts directly into the db
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=100_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=verbose")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["period_type"] == "FY"
+    assert len(data[0]["metrics"]) == 1
+    assert data[0]["metrics"][0]["metric"] == "revenue"
+
+
+def test_get_financials_with_filters(client, engine):
+    ticker = "META"
+    _create_company(client, ticker, "Meta")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=100_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=20_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=25_000_000,
+                unit="USD",
+                end_date=date(2024, 3, 31),
+                period_type="Q1",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    # filter by metric only
+    response = client.get(
+        f"/companies/{ticker}/financials?metric=revenue&format=verbose"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert all(d["metrics"][0]["metric"] == "revenue" for d in data)
+
+    # filter by metric and period_type
+    response = client.get(
+        f"/companies/{ticker}/financials?metric=revenue&period_type=FY&format=verbose"
+    )
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["period_type"] == "FY"
+
+
+def test_get_financials_company_not_found(client):
+    response = client.get("/companies/UNKNOWN/financials")
+    assert response.status_code == 404
+
+
+def test_get_taxonomy(client):
+    response = client.get("/taxonomy")
+    assert response.status_code == 200
+    data = response.json()
+    # taxonomy is seeded during lifespan, so there should be mappings
+    assert len(data) > 0
+    assert "xbrl_tag" in data[0]
+    assert "metric" in data[0]
+
+
+def test_get_taxonomy_filtered(client):
+    response = client.get("/taxonomy?metric=revenue")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) > 0
+    assert all(d["metric"] == "revenue" for d in data)
+
+
+def test_get_financials_format_minimal(client, engine):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=100_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=20_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "rev" in data[0]
+    assert "ni" in data[0]
+    assert data[0]["rev"] == 100_000_000
+    assert "period" in data[0]
+    assert "end" in data[0]
+
+
+def test_get_financials_format_standard(client, engine):
+    ticker = "MSFT"
+    _create_company(client, ticker, "Microsoft")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=200_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=standard")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "revenue" in data[0]
+    assert data[0]["revenue"] == 200_000_000
+    assert "period_type" in data[0]
+    assert "end_date" in data[0]
+
+
+def test_get_financials_fields_filter(client, engine):
+    ticker = "GOOG"
+    _create_company(client, ticker, "Google")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=300_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=50_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="total_assets",
+                value=400_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?fields=rev,ni")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "rev" in data[0]
+    assert "ni" in data[0]
+    assert "ta" not in data[0]
+
+
+def test_get_financials_fields_with_standard_format(client, engine):
+    ticker = "NVDA"
+    _create_company(client, ticker, "NVIDIA")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        facts = [
+            FinancialFact(
+                company_id=company.id,
+                metric="revenue",
+                value=250_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+            FinancialFact(
+                company_id=company.id,
+                metric="net_income",
+                value=75_000_000,
+                unit="USD",
+                end_date=date(2024, 12, 31),
+                period_type="FY",
+            ),
+        ]
+        for f in facts:
+            db.add(f)
+        db.commit()
+
+    response = client.get(
+        f"/companies/{ticker}/financials?format=standard&fields=rev,ni"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert "revenue" in data[0]
+    assert "net_income" in data[0]
+    assert data[0]["revenue"] == 250_000_000
+
+
+# --- Data Freshness _meta ---
+
+
+def test_meta_minimal_format_keys(client, engine):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=100_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+            filing_date=date(2025, 2, 15),
+            source="edgar",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    assert response.status_code == 200
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fy" in meta
+    assert "filed" in meta
+    assert "src" in meta
+    assert "age_days" in meta
+    assert meta["fy"] == 2024
+    assert meta["filed"] == "2025-02-15"
+    assert meta["src"] == "edgar"
+    assert isinstance(meta["age_days"], int)
+
+
+def test_meta_standard_format_keys(client, engine):
+    ticker = "MSFT"
+    _create_company(client, ticker, "Microsoft")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=200_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+            filing_date=date(2025, 2, 20),
+            source="edgar",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=standard")
+    assert response.status_code == 200
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fiscal_year" in meta
+    assert "filed_date" in meta
+    assert "source" in meta
+    assert "data_age_days" in meta
+    assert meta["fiscal_year"] == 2024
+    assert meta["filed_date"] == "2025-02-20"
+
+
+def test_meta_none_filing_date(client, engine):
+    ticker = "GOOG"
+    _create_company(client, ticker, "Google")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=150_000_000,
+            unit="USD",
+            end_date=date(2024, 12, 31),
+            period_type="FY",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    assert response.status_code == 200
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert meta["age_days"] is None
+    assert meta["filed"] is None
+
+
+# --- Error Response Schema ---
+
+
+def test_error_schema_not_found(client):
+    response = client.get("/companies/ZZZZ/financials")
+    assert response.status_code == 404
+    data = response.json()
+    assert data["error"] == "not_found"
+    assert "message" in data
+    assert data["ticker"] == "ZZZZ"
+    assert "detail" not in data or data.get("detail") is None
+
+
+def test_error_schema_already_exists(client):
+    ticker = "SCHM"
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.return_value = (Company(ticker=ticker, name="Schm Corp"), [])
+        client.post(f"/companies/{ticker}")
+
+    response = client.post(f"/companies/{ticker}")
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"] == "already_exists"
+    assert "message" in data
+    assert data["ticker"] == ticker
+
+
+def test_error_schema_ingestion_failed(client):
+    ticker = "BADINC"
+    with patch("services.yfinance_client._fetch_data_sync") as mock_fetch:
+        mock_fetch.side_effect = YahooFinanceError("Symbol not found")
+        response = client.post(f"/companies/{ticker}")
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"] == "ingestion_failed"
+    assert "message" in data
+    assert data["ticker"] == ticker
+    assert "Symbol not found" in data["detail"]
+
+
+def test_error_schema_invalid_params(client, engine):
+    ticker = "AAPL"
+    _create_company(client, ticker, "Apple")
+
+    response = client.get(f"/companies/{ticker}/financials?format=bad")
+    assert response.status_code == 422
+    data = response.json()
+    assert data["error"] == "invalid_params"
+    assert "message" in data
+    assert "format" in data["field"]
+
+
+def test_meta_quarterly_includes_fq(client, engine):
+    ticker = "META"
+    _create_company(client, ticker, "Meta")
+
+    from sqlmodel import Session
+
+    with Session(engine) as db:
+        from repository import get_company_by_ticker
+
+        company = get_company_by_ticker(db, ticker)
+        fact = FinancialFact(
+            company_id=company.id,
+            metric="revenue",
+            value=50_000_000,
+            unit="USD",
+            end_date=date(2024, 3, 31),
+            period_type="Q1",
+            filing_date=date(2024, 5, 1),
+            source="edgar",
+        )
+        db.add(fact)
+        db.commit()
+
+    response = client.get(f"/companies/{ticker}/financials?format=minimal")
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fq" in meta
+    assert meta["fq"] == "Q1"
+    assert "fy" not in meta
+
+    response = client.get(f"/companies/{ticker}/financials?format=standard")
+    data = response.json()
+    meta = data[0]["_meta"]
+    assert "fiscal_quarter" in meta
+    assert meta["fiscal_quarter"] == "Q1"
+    assert "fiscal_year" not in meta
